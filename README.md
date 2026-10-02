@@ -158,11 +158,62 @@ The answer should show your own account, for example `u:CONTOSO\jane`, and the n
 | `InsufficientAccessRights` or `AccessDenied` | Active Directory refused the change for your account. adslayer can do only what your account can do. |
 | Your AI agent does not list the adslayer tools | Restart your AI agent. In Claude Code, run `claude mcp list` to check that adslayer is there. |
 
-### Update or remove
+### Update
 
 `npx` keeps a copy of adslayer and may keep using it after a new version comes out. To get the newest version, close your AI agent, delete the folder `%LOCALAPPDATA%\npm-cache\_npx`, and start the agent again.
 
-To remove adslayer from Claude Code, run `claude mcp remove adslayer`. For other AI agents, delete the `adslayer` entry from the agent's config file. Then delete the folder `%USERPROFILE%\.adslayer`, which holds your list of domains.
+## Uninstall
+
+Follow these steps on the machine where you installed adslayer. Uninstalling changes nothing in Active Directory. adslayer adds nothing to the domain itself, and any changes your AI agent made through adslayer stay in place.
+
+### 1. Remove adslayer from your AI agent
+
+For Claude Code, run:
+
+```powershell
+claude mcp remove adslayer
+```
+
+Then run `claude mcp list`. adslayer should no longer be in the list.
+
+For Claude Desktop and other AI agents, open the agent's config file and delete the `"adslayer"` entry under `mcpServers`. For Claude Desktop on Windows, the file is `%APPDATA%\Claude\claude_desktop_config.json`. Then restart your AI agent.
+
+### 2. Delete your list of domains
+
+```powershell
+Remove-Item -Recurse -Force "$env:USERPROFILE\.adslayer"
+```
+
+This folder holds only the domains you added with `connect`. It holds no passwords.
+
+### 3. Delete the copy that npx downloaded
+
+```powershell
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\npm-cache\_npx"
+```
+
+This deletes every package that `npx` has downloaded, not only adslayer. For any other tool that runs through `npx`, npx downloads it again the next time it runs.
+
+### 4. Delete GPO backups, if you made any
+
+`gpo.backup` writes each backup to the folder on this machine that the script named. adslayer does not keep a list of these folders. A backup folder holds a `manifest.xml` file and one folder per GPO, named by the GPO's id in braces. Delete a backup only if you no longer need it, because it is the only way to restore that GPO to the state it was in.
+
+### 5. Decide whether to keep the software from installation steps 2 to 4
+
+Other programs on this machine may use Node.js, the Visual C++ Redistributable or Group Policy Management. Keep them unless you installed them only for adslayer. To remove them, run PowerShell as administrator.
+
+```powershell
+winget uninstall OpenJS.NodeJS.LTS
+winget uninstall Microsoft.VCRedist.2015+.x64
+```
+
+To remove Group Policy Management on Windows 10 or 11, run:
+
+```powershell
+Remove-WindowsCapability -Online -Name Rsat.GroupPolicy.Management.Tools~~~~0.0.1.0
+```
+
+On Windows Server, run `Uninstall-WindowsFeature GPMC`. Do not remove it from a domain controller, because the people who manage the domain use it there.
 
 ## Connections
 
