@@ -31,7 +31,13 @@ return await ad.modify("CN=Jane Doe,OU=Sales,DC=contoso,DC=local", [{ op: "repla
 const pw = '"' + newPassword + '"';
 let b = "";
 for (let i = 0; i < pw.length; i++) { const c = pw.charCodeAt(i); b += String.fromCharCode(c & 255, c >> 8); }
-return await ad.modify("CN=Jane Doe,OU=Sales,DC=contoso,DC=local", [{ op: "replace", attribute: "unicodePwd", values: { base64: btoa(b) } }, { op: "replace", attribute: "pwdLastSet", values: "0" }]);`;
+return await ad.modify("CN=Jane Doe,OU=Sales,DC=contoso,DC=local", [{ op: "replace", attribute: "unicodePwd", values: { base64: btoa(b) } }, { op: "replace", attribute: "pwdLastSet", values: "0" }]);
+
+// Restore a deleted user from the Recycle Bin to where it was. Delete isDeleted first, then set the new DN.
+const controls = { showDeleted: true };
+const gone = (await ad.search({ base: "CN=Deleted Objects,DC=contoso,DC=local", filter: "(&(isDeleted=TRUE)(sAMAccountName=jdoe))", attributes: ["lastKnownParent", "msDS-LastKnownRDN"], controls })).entries[0];
+const to = "CN=" + gone.attributes["msDS-LastKnownRDN"][0] + "," + gone.attributes.lastKnownParent[0];
+return await ad.modify(gone.dn, [{ op: "delete", attribute: "isDeleted" }, { op: "replace", attribute: "distinguishedName", values: to }], { controls });`;
 
 export interface ExecuteDeps {
   store: Pick<ConnectionStore, "resolve">;

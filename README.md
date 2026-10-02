@@ -232,6 +232,8 @@ The agent can also add a connection with the `connection_add` tool, in either mo
 
 A read connection refuses every `add`, `modify`, `delete` and `move`, and every GPO change, before anything is sent. `gpo.backup` is allowed, because it changes nothing in the domain. That mode check is the only limit adslayer puts on a write. A write connection sends whatever the script asks for, and Active Directory permissions decide the rest (ADR-0004).
 
+To bring back a deleted object, a script finds it in the Recycle Bin with `ad.search` and the `showDeleted` control, then restores it with `ad.modify` and the same control. A read connection can find deleted objects but cannot restore them.
+
 adslayer does not back anything up, show a preview, or keep its own log. The yoloslayer skills hold those steps. Without them, an agent gets no backup and no preview. Active Directory's own security log, with Directory Service Changes auditing turned on, records each change.
 
 ## Where results go

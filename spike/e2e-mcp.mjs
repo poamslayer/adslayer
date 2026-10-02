@@ -106,6 +106,58 @@ await check(`execute: a write outside OU=Lab is ${role === "da" ? "allowed" : "r
   return out.result.slice(0, 60);
 });
 
+// Issue #2: the Recycle Bin. A user made for the test is deleted, found with showDeleted, and restored.
+{
+  const sam = `e2e-${Date.now().toString(36)}`;
+  const userDn = `CN=${sam},${LAB}`;
+  const groupDn = `CN=${sam}-g,${LAB}`;
+  const findDeleted = `(await ad.search({ base: "CN=Deleted Objects,DC=lab,DC=adslayer,DC=test", filter: "(&(isDeleted=TRUE)(sAMAccountName=${sam}))", attributes: ["lastKnownParent", "msDS-LastKnownRDN"], controls: { showDeleted: true } })).entries[0]`;
+  const restore = `await ad.modify(gone.dn, [{ op: "delete", attribute: "isDeleted" }, { op: "replace", attribute: "distinguishedName", values: "CN=" + gone.attributes["msDS-LastKnownRDN"][0] + "," + gone.attributes.lastKnownParent[0] }], { controls: { showDeleted: true } })`;
+
+  const made = await run("lab-w", `
+    await ad.add("${userDn}", { objectClass: "user", sAMAccountName: "${sam}" });
+    ${role === "da" ? `await ad.add("${groupDn}", { objectClass: "group", sAMAccountName: "${sam}-g" });
+    await ad.modify("${groupDn}", [{ op: "add", attribute: "member", values: "${userDn}" }]);` : ""}
+    await ad.delete("${userDn}");
+    return "made and deleted";`);
+
+  if (role === "da") {
+    await check("execute: the read connection finds the deleted user but refuses to restore it", async () => {
+      must(made.ok, JSON.stringify(made.error));
+      const out = await run("lab", `const gone = ${findDeleted}; if (!gone) return "not found"; try { ${restore}; return "restored"; } catch (e) { return e.message; }`);
+      must(out.ok && /read mode/.test(out.result), JSON.stringify(out.result ?? out.error));
+      must(out.calls.length === 1 && out.calls[0].op === "search", `calls: ${JSON.stringify(out.calls)}`);
+      return "found; restore refused before any LDAP call";
+    });
+
+    await check("execute: restore a deleted user from the Recycle Bin, with its group membership", async () => {
+      must(made.ok, JSON.stringify(made.error));
+      const out = await run("lab-w", `
+        const gone = ${findDeleted};
+        if (!gone) return { found: false };
+        const back = ${restore};
+        const u = await ad.get(back.dn, ["memberOf", "isDeleted"]);
+        return { found: true, dn: back.dn, memberOf: u?.attributes.memberOf ?? [], isDeleted: u?.attributes.isDeleted ?? null };`);
+      must(out.ok, JSON.stringify(out.error));
+      must(out.result.found, "the deleted user was not in CN=Deleted Objects");
+      must(out.result.dn === userDn && out.result.isDeleted === null, JSON.stringify(out.result));
+      must(out.result.memberOf.includes(groupDn), `memberOf: ${JSON.stringify(out.result.memberOf)}`);
+      return `restored to ${userDn.split(",")[0]}, still a member of ${groupDn.split(",")[0]}`;
+    });
+  } else {
+    await check("execute: lab.delegated cannot restore from the Recycle Bin", async () => {
+      must(made.ok, JSON.stringify(made.error));
+      const out = await run("lab-w", `const gone = ${findDeleted}; if (!gone) return "not visible"; try { ${restore}; return "restored"; } catch (e) { return e.message; }`);
+      must(out.ok, JSON.stringify(out.error));
+      must(out.result !== "restored", "lab.delegated restored the user; the lab grants it Reanimate Tombstones");
+      return out.result === "not visible" ? "Deleted Objects not visible to lab.delegated" : out.result.slice(0, 60);
+    });
+  }
+
+  // Leave nothing behind in OU=Lab. A deleted object stays in the Recycle Bin until it expires.
+  await run("lab-w", `for (const dn of ["${userDn}", "${groupDn}"]) { try { await ad.delete(dn); } catch (e) { if (!/^NoSuchObject:/.test(e.message)) throw e; } } return "clean";`);
+}
+
 async function search(code, refresh) {
   const t0 = Date.now();
   const res = await mcp.callTool({ name: "search", arguments: { domain: "lab", code, ...(refresh ? { refresh } : {}) } });

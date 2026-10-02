@@ -93,6 +93,42 @@ describe("the ad binding", () => {
     ]);
   });
 
+  it("passes showDeleted through on get, search and modify", async () => {
+    const b = backend(() => ({ entries: [], more: false }));
+    const { handle } = makeBinding({ backend: b, connection: write });
+    const controls = { showDeleted: true };
+    await handle("get", ["CN=a\\0ADEL:x,CN=Deleted Objects,DC=x", ["isDeleted"], { controls }]);
+    await handle("search", [{ base: "CN=Deleted Objects,DC=x", filter: "(isDeleted=TRUE)", controls }]);
+    await handle("modify", ["CN=a\\0ADEL:x,CN=Deleted Objects,DC=x", [{ op: "delete", attribute: "isDeleted" }, { op: "replace", attribute: "distinguishedName", values: "CN=a,OU=Lab,DC=x" }], { controls }]);
+    expect(b.call.mock.calls.map((c) => c[2].controls)).toEqual([controls, controls, controls]);
+  });
+
+  it("sends no controls when none are asked for", async () => {
+    const b = backend(() => ({ dn: "CN=a,DC=x" }));
+    await makeBinding({ backend: b, connection: write }).handle("modify", ["CN=a,DC=x", [{ op: "delete", attribute: "description" }]]);
+    expect(b.call.mock.calls[0][2]).not.toHaveProperty("controls");
+  });
+
+  it("lets a read connection search deleted objects, and refuses the restore (ADR-0004)", async () => {
+    const b = backend();
+    const { handle } = makeBinding({ backend: b, connection: read });
+    await handle("search", [{ base: "CN=Deleted Objects,DC=x", controls: { showDeleted: true } }]);
+    await expect(handle("modify", ["CN=a,DC=x", [{ op: "delete", attribute: "isDeleted" }], { controls: { showDeleted: true } }])).rejects.toThrow(/read mode/);
+    expect(b.call).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["search", [{ controls: { notify: true } }], /Unknown control "notify"/],
+    ["search", [{ controls: { showDeleted: "yes" } }], /showDeleted must be true/],
+    ["search", [{ controls: ["showDeleted"] }], /controls must be an object/],
+    ["get", ["CN=a,DC=x", undefined, { controls: { tree: true } }], /Unknown control "tree"/],
+    ["modify", ["CN=a,DC=x", [{ op: "delete", attribute: "d" }], { controls: { x: true } }], /Unknown control "x"/],
+  ])("rejects a bad controls option on %s without sending it", async (op, args, message) => {
+    const b = backend();
+    await expect(makeBinding({ backend: b, connection: write }).handle(op, args)).rejects.toThrow(message);
+    expect(b.call).not.toHaveBeenCalled();
+  });
+
   it("stops a run at the call cap", async () => {
     const { handle } = makeBinding({ backend: backend(), connection: read, maxCalls: 2 });
     await handle("whoami", []);

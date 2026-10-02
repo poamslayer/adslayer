@@ -183,6 +183,21 @@ function New-DirectoryAttribute([string]$name, $values) {
     , $attr
 }
 
+# --- Controls -------------------------------------------------------------------------------
+
+# The controls a script may send, by name. The binding checks the names first; this is the second
+# check. showDeleted shows objects in the Recycle Bin and allows a modify that restores one.
+function Add-Controls($request, $controls) {
+    if ($null -eq $controls) { return }
+    foreach ($p in $controls.PSObject.Properties) {
+        if ($p.Value -ne $true) { throw [HelperError]::new('BadRequest', "control $($p.Name) must be true") }
+        switch ($p.Name) {
+            'showDeleted' { [void]$request.Controls.Add((New-Object "$Sdp.ShowDeletedControl")) }
+            default { throw [HelperError]::new('BadRequest', "unknown control '$($p.Name)'") }
+        }
+    }
+}
+
 # --- Search ---------------------------------------------------------------------------------
 
 function Read-Attribute($attr) {
@@ -196,7 +211,7 @@ function Read-Attribute($attr) {
 #
 # An answer can carry both "member;range=0-1499" and an empty plain "member" (seen for a delegated
 # user on PowerShell 7). The plain one must not overwrite the ranged values, so it is skipped.
-function Read-Entry([string]$domain, $entry) {
+function Read-Entry([string]$domain, $entry, $controls = $null) {
     $out = [ordered]@{}
     $names = @($entry.Attributes.AttributeNames)
     $ranged = @{}
@@ -212,6 +227,8 @@ function Read-Entry([string]$domain, $entry) {
             while ($hi -ne '*') {
                 $next = [int]$hi + 1
                 $req = New-SearchRequest $entry.DistinguishedName '(objectClass=*)' ([System.DirectoryServices.Protocols.SearchScope]::Base) @("$base;range=$next-*")
+                # A deleted object is found again only with the same controls.
+                Add-Controls $req $controls
                 $slice = (Send-Request $domain $req).Entries[0]
                 $sliceName = @($slice.Attributes.AttributeNames) | Where-Object { $_ -like "$base;range=*" } | Select-Object -First 1
                 if (-not $sliceName) { break }
@@ -241,6 +258,7 @@ function Invoke-Search($a) {
     $max = if ($a.max) { [Math]::Min([int]$a.max, $HardMax) } else { $DefaultMax }
 
     $req = New-SearchRequest $base $filter $scope $attributes
+    Add-Controls $req $a.controls
     $page = New-Object "$Sdp.PageResultRequestControl" ([Math]::Min($PageSize, $max))
     [void]$req.Controls.Add($page)
 
@@ -250,7 +268,7 @@ function Invoke-Search($a) {
         $resp = Send-Request $domain $req
         foreach ($e in $resp.Entries) {
             if ($entries.Count -ge $max) { $more = $true; break }
-            $entries.Add((Read-Entry $domain $e))
+            $entries.Add((Read-Entry $domain $e $a.controls))
         }
         if ($more) { break }
         $cookie = ($resp.Controls | Where-Object { $_ -is [System.DirectoryServices.Protocols.PageResultResponseControl] } | Select-Object -First 1).Cookie
@@ -294,8 +312,13 @@ function Invoke-Modify($a) {
         }
         [void]$req.Modifications.Add($m)
     }
+    Add-Controls $req $a.controls
     [void](Send-Request ([string]$a.domain) $req)
-    [ordered]@{ dn = [string]$a.dn }
+    # A restore from the Recycle Bin moves the object by replacing distinguishedName, so answer
+    # with where it is now, not where it was.
+    $moved = @($changes | Where-Object { [string]$_.op -eq 'replace' -and ([string]$_.attribute) -eq 'distinguishedName' } | Select-Object -Last 1)
+    $dn = if ($moved.Count -gt 0) { [string]@($moved[0].values)[0] } else { [string]$a.dn }
+    [ordered]@{ dn = $dn }
 }
 
 function Invoke-Delete($a) {
