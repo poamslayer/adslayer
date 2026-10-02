@@ -1,0 +1,54 @@
+{
+  "name": "adslayer",
+  "version": "0.1.0",
+  "description": "An MCP server that lets an AI agent read and change on-premises Active Directory, by writing short scripts that run in a sandbox. Runs on Windows as the logged-on user. Tools: docs, search, execute.",
+  "author": "Arnold De La Vega",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/poamslayer/adslayer.git"
+  },
+  "homepage": "https://github.com/poamslayer/adslayer#readme",
+  "bugs": {
+    "url": "https://github.com/poamslayer/adslayer/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "active-directory",
+    "ldap",
+    "group-policy",
+    "code-mode"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "adslayer": "dist/cli/main.js"
+  },
+  "files": [
+    "dist",
+    "helper/adslayer-helper.ps1",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/cli/main.js",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "miniflare": "4.20260730.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "typescript": "5",
+    "vitest": "^5.0.1"
+  }
+}

@@ -1,0 +1,5 @@
+# No trailing slash: a symlink named node_modules is not a directory. graphslayer learned this.
+node_modules
+dist/
+.env
+*.log
