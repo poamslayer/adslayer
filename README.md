@@ -230,7 +230,7 @@ The agent can also add a connection with the `connection_add` tool, in either mo
 
 ## Writes
 
-A read connection refuses every `add`, `modify`, `delete` and `move`, and every GPO change, before anything is sent. `gpo.backup` is allowed, because it changes nothing in the domain. That mode check is the only limit adslayer puts on a write. A write connection sends whatever the script asks for, and Active Directory permissions decide the rest (ADR-0004).
+A read connection refuses every `add`, `modify`, `delete`, `move`, `addAce` and `removeAce`, and every GPO change, before anything is sent. It can still read permissions with `getAcl`. `gpo.backup` is allowed, because it changes nothing in the domain. That mode check is the only limit adslayer puts on a write. A write connection sends whatever the script asks for, and Active Directory permissions decide the rest (ADR-0004).
 
 To bring back a deleted object, a script finds it in the Recycle Bin with `ad.search` and the `showDeleted` control, then restores it with `ad.modify` and the same control. A read connection can find deleted objects but cannot restore them.
 

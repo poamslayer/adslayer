@@ -1,18 +1,22 @@
+import type { CatalogueCache } from "../catalogue/catalogue.js";
 import { modeOf } from "../connections/store.js";
 import { LdapError, type LdapBackend } from "../ldap/backend.js";
 import type { AdCallRecord, Connection } from "../types.js";
+import { NO_NAMES, describeAce, encodeAce, needsCatalogue, type RawAce } from "./acl.js";
 import type { BindingHandler } from "./sandbox.js";
 
 export interface BindingDeps {
   backend: LdapBackend;
   connection: Connection;
   maxCalls?: number;
+  /** Names the GUIDs in an ACL. Without it, getAcl answers with GUIDs and addAce takes only GUIDs. */
+  catalogues?: Pick<CatalogueCache, "get">;
 }
 
 export const DEFAULT_MAX_CALLS = 200;
 export const DEFAULT_ATTRIBUTES = ["name", "objectClass", "sAMAccountName"];
 const WRITE_OPS: ReadonlySet<string> = new Set([
-  "add", "modify", "delete", "move",
+  "add", "modify", "delete", "move", "addAce", "removeAce",
   "gpo.create", "gpo.delete", "gpo.link", "gpo.unlink", "gpo.set", "gpo.remove",
 ]);
 
@@ -35,6 +39,16 @@ export function makeBinding(deps: BindingDeps): { handle: BindingHandler; calls:
       records.push({ op, target, ok: false, ...(code ? { code } : {}), ms: Date.now() - t0 });
       // The script sees the message and nothing else, so the code goes in it.
       throw new Error(code ? `${code}: ${(err as Error).message}` : (err as Error).message);
+    }
+  }
+
+  // A catalogue that cannot be read leaves GUIDs as GUIDs rather than failing the ACL call.
+  async function names() {
+    if (!deps.catalogues) return NO_NAMES;
+    try {
+      return await deps.catalogues.get(connection.domain);
+    } catch {
+      return NO_NAMES;
     }
   }
 
@@ -100,6 +114,24 @@ export function makeBinding(deps: BindingDeps): { handle: BindingHandler; calls:
           ...(to.newParent !== undefined ? { newParent: stringArg(to.newParent, "newParent") } : {}),
           ...(to.newName !== undefined ? { newName: stringArg(to.newName, "newName") } : {}),
         });
+      }
+      case "getAcl": {
+        const dn = stringArg(args[0], "dn");
+        const acl = (await send("acl.get", dn, { dn })) as { owner: unknown; protected: boolean; aces: RawAce[] };
+        const catalogue = await names();
+        return { dn, owner: acl.owner, protected: acl.protected, aces: acl.aces.map((a) => describeAce(a, catalogue)) };
+      }
+      case "addAce":
+      case "removeAce": {
+        const dn = stringArg(args[0], "dn");
+        const ace = objectArg(args[1], "ace");
+        if (op === "removeAce" && ace.inherited === true) {
+          throw new Error("This ACE is inherited from a parent object. Remove it on the parent, or turn off inheritance there.");
+        }
+        // Names to look up need the catalogue itself: a failure to read it is the error worth seeing.
+        const catalogue = needsCatalogue(ace) && deps.catalogues ? await deps.catalogues.get(connection.domain) : NO_NAMES;
+        const encoded = encodeAce(ace, catalogue);
+        return send(op === "addAce" ? "acl.add" : "acl.remove", dn, { dn, ace: encoded });
       }
       case "gpo.list":
         return send(op, "", {});

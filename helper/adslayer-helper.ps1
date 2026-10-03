@@ -349,6 +349,138 @@ function Invoke-Move($a) {
     [ordered]@{ dn = "$newName,$newParent" }
 }
 
+# --- ACLs -----------------------------------------------------------------------------------
+#
+# The helper works in SIDs, access masks, ACE flags and GUIDs. The binding (src/core/sandbox/acl.ts)
+# turns those into rights, inheritance and attribute, class and right names. .NET's ACL classes
+# run only on Windows.
+
+$AceTypePresent = [System.Security.AccessControl.ObjectAceFlags]::ObjectAceTypePresent
+$InheritedAceTypePresent = [System.Security.AccessControl.ObjectAceFlags]::InheritedObjectAceTypePresent
+
+function Get-SidName($sid) {
+    try { $sid.Translate([System.Security.Principal.NTAccount]).Value } catch { $null }
+}
+
+# A SID as it is, or an account name such as CONTOSO\Helpdesk, translated by the domain.
+function Resolve-Principal([string]$principal) {
+    if ($principal -match '^S-1-') { return [System.Security.Principal.SecurityIdentifier]::new($principal) }
+    try { ([System.Security.Principal.NTAccount]::new($principal)).Translate([System.Security.Principal.SecurityIdentifier]) }
+    catch { throw [HelperError]::new('NoSuchPrincipal', "no account named '$principal'") }
+}
+
+# Every ACE in a descriptor's DACL, as { type, sid, name, mask, flags, objectType, inheritedObjectType }.
+function ConvertTo-RawAces($sd) {
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($ace in $sd.DiscretionaryAcl) {
+        $type = switch ([string]$ace.AceQualifier) { 'AccessAllowed' { 'allow' } 'AccessDenied' { 'deny' } default { [string]$_ } }
+        $objectType = $null
+        $inheritedObjectType = $null
+        if ($ace -is [System.Security.AccessControl.ObjectAce]) {
+            if ($ace.ObjectAceFlags -band $AceTypePresent) { $objectType = $ace.ObjectAceType.ToString() }
+            if ($ace.ObjectAceFlags -band $InheritedAceTypePresent) { $inheritedObjectType = $ace.InheritedObjectAceType.ToString() }
+        }
+        # .NET holds the mask as a signed 32-bit number; JSON gets it unsigned.
+        $mask = [long]$ace.AccessMask
+        if ($mask -lt 0) { $mask += 4294967296 }
+        $out.Add([ordered]@{
+            type = $type; sid = $ace.SecurityIdentifier.Value; name = Get-SidName $ace.SecurityIdentifier
+            mask = $mask
+            flags = [int]$ace.AceFlags; objectType = $objectType; inheritedObjectType = $inheritedObjectType
+        })
+    }
+    , $out.ToArray()
+}
+
+# The arguments AddAccess and RemoveAccessSpecific take, from one ACE as the binding sends it.
+function Get-AceArgs($ace) {
+    $flags = [System.Security.AccessControl.ObjectAceFlags]::None
+    $objectType = [guid]::Empty
+    $inheritedObjectType = [guid]::Empty
+    if ($ace.objectType) { $flags = $flags -bor $AceTypePresent; $objectType = [guid][string]$ace.objectType }
+    if ($ace.inheritedObjectType) { $flags = $flags -bor $InheritedAceTypePresent; $inheritedObjectType = [guid][string]$ace.inheritedObjectType }
+    $type = switch ([string]$ace.type) {
+        'allow' { [System.Security.AccessControl.AccessControlType]::Allow }
+        'deny' { [System.Security.AccessControl.AccessControlType]::Deny }
+        default { throw [HelperError]::new('BadRequest', "ace type must be allow or deny, not '$_'") }
+    }
+    $mask = [long]$ace.mask
+    if ($mask -gt [int]::MaxValue) { $mask -= 4294967296 }
+    @{
+        Type = $type; Sid = Resolve-Principal ([string]$ace.principal); Mask = [int]$mask
+        Inheritance = [System.Security.AccessControl.InheritanceFlags][int]$ace.inheritanceFlags
+        Propagation = [System.Security.AccessControl.PropagationFlags][int]$ace.propagationFlags
+        Flags = $flags; ObjectType = $objectType; InheritedObjectType = $inheritedObjectType
+    }
+}
+
+function Add-Ace($sd, $ace) {
+    $x = Get-AceArgs $ace
+    $sd.DiscretionaryAcl.AddAccess($x.Type, $x.Sid, $x.Mask, $x.Inheritance, $x.Propagation, $x.Flags, $x.ObjectType, $x.InheritedObjectType)
+}
+
+# True when an ACE matching exactly was there and is now gone.
+function Remove-Ace($sd, $ace) {
+    $x = Get-AceArgs $ace
+    $before = $sd.DiscretionaryAcl.Count
+    $sd.DiscretionaryAcl.RemoveAccessSpecific($x.Type, $x.Sid, $x.Mask, $x.Inheritance, $x.Propagation, $x.Flags, $x.ObjectType, $x.InheritedObjectType)
+    $sd.DiscretionaryAcl.Count -lt $before
+}
+
+# The SD_FLAGS control asks only for the parts named, so a user without rights to the SACL, or
+# who does not own the object, can still read the owner and DACL and write the DACL.
+function Read-SecurityDescriptor([string]$domain, [string]$dn, $masks) {
+    $req = New-SearchRequest $dn '(objectClass=*)' ([System.DirectoryServices.Protocols.SearchScope]::Base) @('nTSecurityDescriptor')
+    [void]$req.Controls.Add((New-Object "$Sdp.SecurityDescriptorFlagControl" $masks))
+    $entry = (Send-Request $domain $req).Entries[0]
+    # Assigned inside the if, not from it: an if's output would unroll the attribute into its bytes.
+    $attr = $null
+    if ($entry) { $attr = $entry.Attributes['nTSecurityDescriptor'] }
+    if ($null -eq $attr) { throw [HelperError]::new('InsufficientAccessRights', "cannot read the security descriptor of $dn") }
+    [System.Security.AccessControl.CommonSecurityDescriptor]::new($true, $true, [byte[]]$attr.GetValues([byte[]])[0], 0)
+}
+
+function Write-Dacl([string]$domain, [string]$dn, $sd) {
+    $bytes = New-Object byte[] $sd.BinaryLength
+    $sd.GetBinaryForm($bytes, 0)
+    $m = New-Object "$Sdp.DirectoryAttributeModification"
+    $m.Name = 'nTSecurityDescriptor'
+    $m.Operation = [System.DirectoryServices.Protocols.DirectoryAttributeOperation]::Replace
+    [void]$m.Add([byte[]]$bytes)
+    $req = New-Object "$Sdp.ModifyRequest"
+    $req.DistinguishedName = $dn
+    [void]$req.Modifications.Add($m)
+    [void]$req.Controls.Add((New-Object "$Sdp.SecurityDescriptorFlagControl" ([System.DirectoryServices.Protocols.SecurityMasks]::Dacl)))
+    [void](Send-Request $domain $req)
+}
+
+function Invoke-AclGet($a) {
+    if (-not $a.dn) { throw [HelperError]::new('BadRequest', 'acl.get needs dn') }
+    $masks = [System.DirectoryServices.Protocols.SecurityMasks]::Owner -bor [System.DirectoryServices.Protocols.SecurityMasks]::Dacl
+    $sd = Read-SecurityDescriptor ([string]$a.domain) ([string]$a.dn) $masks
+    $protected = ($sd.ControlFlags -band [System.Security.AccessControl.ControlFlags]::DiscretionaryAclProtected) -ne 0
+    [ordered]@{
+        owner = [ordered]@{ sid = $sd.Owner.Value; name = Get-SidName $sd.Owner }
+        protected = $protected
+        aces = ConvertTo-RawAces $sd
+    }
+}
+
+function Invoke-AclChange($a, [bool]$add) {
+    if (-not $a.dn -or -not $a.ace) { throw [HelperError]::new('BadRequest', 'acl.add and acl.remove need dn and ace') }
+    $domain = [string]$a.domain
+    $dn = [string]$a.dn
+    $sd = Read-SecurityDescriptor $domain $dn ([System.DirectoryServices.Protocols.SecurityMasks]::Dacl)
+    if ($add) {
+        Add-Ace $sd $a.ace
+        Write-Dacl $domain $dn $sd
+        return [ordered]@{ dn = $dn }
+    }
+    $removed = Remove-Ace $sd $a.ace
+    if ($removed) { Write-Dacl $domain $dn $sd }
+    [ordered]@{ dn = $dn; removed = $removed }
+}
+
 # --- Group Policy (ADR-0007) ----------------------------------------------------------------
 #
 # GPO changes go through Microsoft's GroupPolicy module, which keeps the GPO's version numbers and
@@ -671,6 +803,9 @@ while ($null -ne ($line = $stdin.ReadLine())) {
             'modify' { Invoke-Modify $a }
             'delete' { Invoke-Delete $a }
             'move' { Invoke-Move $a }
+            'acl.get' { Invoke-AclGet $a }
+            'acl.add' { Invoke-AclChange $a $true }
+            'acl.remove' { Invoke-AclChange $a $false }
             default { throw [HelperError]::new('BadRequest', "unknown op '$($msg.op)'") }
         }
         Write-Answer ([ordered]@{ id = $id; ok = $true; value = $value })

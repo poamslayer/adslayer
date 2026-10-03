@@ -158,6 +158,70 @@ await check(`execute: a write outside OU=Lab is ${role === "da" ? "allowed" : "r
   await run("lab-w", `for (const dn of ["${userDn}", "${groupDn}"]) { try { await ad.delete(dn); } catch (e) { if (!/^NoSuchObject:/.test(e.message)) throw e; } } return "clean";`);
 }
 
+// Issue #1: ACLs. An OU and a group made for the test; both are deleted at the end.
+{
+  const stamp = Date.now().toString(36);
+  const ouDn = `OU=e2e-acl-${stamp},${LAB}`;
+  const groupSam = `e2e-${stamp}-h`;
+  const groupDn = `CN=${groupSam},${LAB}`;
+  const protect = `{ principal: "S-1-1-0", type: "deny", rights: ["Delete", "DeleteTree"] }`;
+  // AD allows a delete with Delete on the object or DeleteChild on its parent, so protecting needs both.
+  const protectParent = `{ principal: "S-1-1-0", type: "deny", rights: ["DeleteChild"] }`;
+  const reset = `{ principal: "LAB\\\\${groupSam}", type: "allow", rights: ["ExtendedRight"], objectType: "User-Force-Change-Password", inheritedObjectType: "user", inheritance: "Descendents" }`;
+  const made = await run("lab-w", `
+    await ad.add("${ouDn}", { objectClass: "organizationalUnit" });
+    await ad.add("${groupDn}", { objectClass: "group", sAMAccountName: "${groupSam}" });
+    return "made";`);
+
+  await check("execute: getAcl on OU=Lab shows lab.delegated's full control", async () => {
+    const out = await run("lab", `const acl = await ad.getAcl("${LAB}"); return { owner: acl.owner, n: acl.aces.length, mine: acl.aces.filter(a => (a.principal.name ?? "").toLowerCase() === "lab\\\\lab.delegated") };`);
+    must(out.ok, JSON.stringify(out.error));
+    must(out.result.mine.some((a) => a.type === "allow" && a.rights.includes("GenericAll")), JSON.stringify(out.result.mine));
+    return `${out.result.n} ACEs, owner ${out.result.owner.name}; lab.delegated: ${out.result.mine.map((a) => `${a.rights.join("+")} ${a.inheritance}`).join(", ")}`;
+  });
+
+  await check("execute: protect a new OU from deletion, see the delete refused, then unprotect and delete it", async () => {
+    must(made.ok, JSON.stringify(made.error));
+    const out = await run("lab-w", `
+      await ad.addAce("${ouDn}", ${protect});
+      await ad.addAce("${LAB}", ${protectParent});
+      let refused;
+      try { await ad.delete("${ouDn}"); refused = "deleted"; } catch (e) { refused = e.message; }
+      const un = await ad.removeAce("${ouDn}", ${protect});
+      // The lab keeps no deny on OU=Lab once the test is over.
+      const unParent = await ad.removeAce("${LAB}", ${protectParent});
+      if (refused !== "deleted") await ad.delete("${ouDn}");
+      return { refused, removed: un.removed && unParent.removed, gone: (await ad.get("${ouDn}")) === null };`);
+    must(out.ok, JSON.stringify(out.error));
+    must(/^InsufficientAccessRights:/.test(out.result.refused), `delete while protected: ${out.result.refused}`);
+    must(out.result.removed && out.result.gone, JSON.stringify(out.result));
+    return "delete refused while protected; deleted after removeAce";
+  });
+
+  await check("execute: grant Reset Password on users in an OU to a group, read it back by name, remove it", async () => {
+    const out = await run("lab-w", `
+      await ad.add("${ouDn}", { objectClass: "organizationalUnit" });
+      await ad.addAce("${ouDn}", ${reset});
+      const granted = (await ad.getAcl("${ouDn}")).aces.filter(a => a.principal.name?.toLowerCase() === "lab\\\\${groupSam}");
+      const un = await ad.removeAce("${ouDn}", granted[0]);
+      const left = (await ad.getAcl("${ouDn}")).aces.filter(a => a.principal.name?.toLowerCase() === "lab\\\\${groupSam}");
+      return { granted, removed: un.removed, left: left.length };`);
+    must(out.ok, JSON.stringify(out.error));
+    const g = out.result.granted;
+    must(g.length === 1 && g[0].objectType === "User-Force-Change-Password" && g[0].inheritedObjectType === "user" && g[0].inheritance === "Descendents" && g[0].rights.join() === "ExtendedRight", JSON.stringify(g));
+    must(out.result.removed && out.result.left === 0, JSON.stringify(out.result));
+    return `granted to ${g[0].principal.name}; removed cleanly`;
+  });
+
+  await check("execute: the read connection refuses addAce before any LDAP call", async () => {
+    const out = await run("lab", `await ad.addAce("${LAB}", ${protect}); return "added";`);
+    must(!out.ok && /read mode/.test(out.error.message) && out.calls.length === 0, JSON.stringify(out));
+    return "refused, 0 calls";
+  });
+
+  await run("lab-w", `for (const dn of ["${ouDn}", "${groupDn}"]) { try { await ad.delete(dn, { tree: true }); } catch (e) { if (!/^NoSuchObject:/.test(e.message)) throw e; } } return "clean";`);
+}
+
 async function search(code, refresh) {
   const t0 = Date.now();
   const res = await mcp.callTool({ name: "search", arguments: { domain: "lab", code, ...(refresh ? { refresh } : {}) } });

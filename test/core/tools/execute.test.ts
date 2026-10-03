@@ -28,7 +28,7 @@ type Out = { ok: boolean; domain: string; result: unknown; error?: { message: st
 describe("execute", () => {
   it("tells the model about the ad object, read mode, and the logged-on user", () => {
     expect(EXECUTE_DESCRIPTION).toContain("declare const ad");
-    expect(EXECUTE_DESCRIPTION).toContain("read mode refuses add, modify, delete and move");
+    expect(EXECUTE_DESCRIPTION).toContain("read mode refuses add, modify, delete, move, addAce and removeAce");
     expect(EXECUTE_DESCRIPTION).toContain("runs as the Windows user");
   });
 

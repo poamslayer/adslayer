@@ -22,10 +22,13 @@ export { SERVER_NAME, SERVER_VERSION } from "./version.js";
 
 export function createServer(deps: ServerDeps): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
-  registerSearchTool(server, { store: deps.store, catalogues: deps.catalogues ?? new CatalogueCache(deps.backend), catalogueSandbox: deps.catalogueSandbox });
+  // One catalogue per domain for the session, shared: search runs scripts over it, and execute
+  // names the GUIDs in an ACL with it.
+  const catalogues = deps.catalogues ?? new CatalogueCache(deps.backend);
+  registerSearchTool(server, { store: deps.store, catalogues, catalogueSandbox: deps.catalogueSandbox });
   // MCP clients cache the tool list, so connection changes must never make a tool appear or
   // disappear during a session. A read connection still gets execute; it refuses writes itself.
-  registerExecuteTool(server, deps);
+  registerExecuteTool(server, { ...deps, catalogues });
   registerDocsTool(server, deps);
   registerConnectionTools(server, deps);
   return server;

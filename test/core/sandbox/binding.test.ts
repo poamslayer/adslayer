@@ -203,3 +203,71 @@ describe("the gpo binding", () => {
     expect(b.call).not.toHaveBeenCalled();
   });
 });
+
+describe("the ACL methods", () => {
+  const RESET = "00299570-246d-11d0-a768-00aa006e0529";
+  const USER = "bf967aba-0de6-11d0-a285-00aa003049e2";
+  const catalogue = { attributes: {}, classes: { user: { guid: USER } }, extendedRights: { "User-Force-Change-Password": { displayName: "Reset Password", guid: RESET } } };
+  const catalogues = { get: vi.fn(async () => catalogue as never) };
+  const reset = { principal: "LAB\\GG-Helpdesk", type: "allow", rights: ["ExtendedRight"], objectType: "User-Force-Change-Password", inheritedObjectType: "user", inheritance: "Descendents" };
+
+  it("getAcl reads the DACL on a read connection and names what it can", async () => {
+    const b = backend(() => ({
+      owner: { sid: "S-1-5-21-1-2-3-512", name: "LAB\\Domain Admins" },
+      protected: false,
+      aces: [{ type: "allow", sid: "S-1-5-21-1-2-3-1104", name: "LAB\\lab.delegated", mask: 0x100, flags: 0x1a, objectType: RESET, inheritedObjectType: USER }],
+    }));
+    const acl = await makeBinding({ backend: b, connection: read, catalogues }).handle("getAcl", ["OU=Lab,DC=x"]);
+    expect(b.call).toHaveBeenCalledWith("lab.adslayer.test", "acl.get", { dn: "OU=Lab,DC=x" });
+    expect(acl).toEqual({
+      dn: "OU=Lab,DC=x",
+      owner: { sid: "S-1-5-21-1-2-3-512", name: "LAB\\Domain Admins" },
+      protected: false,
+      aces: [{ principal: { sid: "S-1-5-21-1-2-3-1104", name: "LAB\\lab.delegated" }, type: "allow", rights: ["ExtendedRight"], objectType: "User-Force-Change-Password", inheritedObjectType: "user", inheritance: "Descendents", inherited: true }],
+    });
+  });
+
+  it("getAcl still answers, with GUIDs, when the catalogue cannot be read", async () => {
+    const b = backend(() => ({ owner: { sid: "S-1-1-0", name: null }, protected: false, aces: [{ type: "allow", sid: "S-1-1-0", name: null, mask: 0x100, flags: 0, objectType: RESET, inheritedObjectType: null }] }));
+    const failing = { get: vi.fn(async () => { throw new Error("no catalogue"); }) };
+    const acl = (await makeBinding({ backend: b, connection: read, catalogues: failing }).handle("getAcl", ["OU=Lab,DC=x"])) as { aces: Array<{ objectType: string }> };
+    expect(acl.aces[0].objectType).toBe(RESET);
+  });
+
+  it.each([["addAce"], ["removeAce"]])("a read connection refuses %s before anything is sent (ADR-0004)", async (op) => {
+    const b = backend();
+    await expect(makeBinding({ backend: b, connection: read, catalogues }).handle(op, ["OU=Lab,DC=x", reset])).rejects.toThrow(/read mode/);
+    expect(b.call).not.toHaveBeenCalled();
+  });
+
+  it("addAce and removeAce send the ACE in the helper's terms", async () => {
+    const b = backend((op) => (op === "acl.remove" ? { dn: "OU=Lab,DC=x", removed: true } : { dn: "OU=Lab,DC=x" }));
+    const { handle, calls } = makeBinding({ backend: b, connection: write, catalogues });
+    await handle("addAce", ["OU=Lab,DC=x", reset]);
+    expect(await handle("removeAce", ["OU=Lab,DC=x", reset])).toEqual({ dn: "OU=Lab,DC=x", removed: true });
+    const sent = { dn: "OU=Lab,DC=x", ace: { principal: "LAB\\GG-Helpdesk", type: "allow", mask: 0x100, inheritanceFlags: 1, propagationFlags: 2, objectType: RESET, inheritedObjectType: USER } };
+    expect(b.call.mock.calls.map((c) => [c[1], c[2]])).toEqual([["acl.add", sent], ["acl.remove", sent]]);
+    expect(calls().map((c) => [c.op, c.target])).toEqual([["acl.add", "OU=Lab,DC=x"], ["acl.remove", "OU=Lab,DC=x"]]);
+  });
+
+  it("does not read the catalogue for an ACE with no names to look up", async () => {
+    const lazy = { get: vi.fn(async () => catalogue as never) };
+    const b = backend(() => ({ dn: "OU=Lab,DC=x" }));
+    await makeBinding({ backend: b, connection: write, catalogues: lazy }).handle("addAce", ["OU=Lab,DC=x", { principal: "S-1-1-0", type: "deny", rights: ["Delete", "DeleteTree"] }]);
+    expect(lazy.get).not.toHaveBeenCalled();
+    expect(b.call.mock.calls[0][2]).toEqual({ dn: "OU=Lab,DC=x", ace: { principal: "S-1-1-0", type: "deny", mask: 0x10040, inheritanceFlags: 0, propagationFlags: 0 } });
+  });
+
+  it("takes an ACE back exactly as getAcl returned it", async () => {
+    const b = backend(() => ({ dn: "OU=Lab,DC=x", removed: true }));
+    const fromGetAcl = { principal: { sid: "S-1-1-0", name: "Everyone" }, type: "deny", rights: ["DeleteTree", "Delete"], inheritance: "None", inherited: false };
+    await makeBinding({ backend: b, connection: write, catalogues }).handle("removeAce", ["OU=Lab,DC=x", fromGetAcl]);
+    expect(b.call.mock.calls[0][2]).toMatchObject({ ace: { principal: "S-1-1-0", mask: 0x10040 } });
+  });
+
+  it("refuses to remove an inherited ACE, which lives on a parent", async () => {
+    const b = backend();
+    await expect(makeBinding({ backend: b, connection: write, catalogues }).handle("removeAce", ["OU=Lab,DC=x", { ...reset, inherited: true }])).rejects.toThrow(/inherited/);
+    expect(b.call).not.toHaveBeenCalled();
+  });
+});
