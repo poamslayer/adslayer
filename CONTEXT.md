@@ -30,6 +30,14 @@ _Avoid_: Property, field
 The forest's list of object classes and attributes, with each attribute's syntax and whether it holds one value or many.
 _Avoid_: Data model
 
+**DACL**:
+The list of permissions on an object, i.e., who is allowed or denied what. It is part of the object's security descriptor, with the owner. adslayer reads it with `ad.getAcl` and changes it one ACE at a time.
+_Avoid_: Permissions list, ACL (an ACL can also be the audit list, the SACL, which adslayer does not touch)
+
+**ACE**:
+One entry in a DACL: a principal, allow or deny, the rights, and optionally the attribute, class or extended right it covers and how it is inherited. An inherited ACE lives on a parent and can be changed only there.
+_Avoid_: Permission entry, rule
+
 **PDC emulator**:
 The one domain controller in each domain that holds the PDC emulator role. Every call from adslayer goes to it. ADR-0006.
 _Avoid_: Primary DC, the DC
@@ -63,7 +71,7 @@ The short name a person gives a connection. The domain argument of a tool accept
 _Avoid_: Name, label
 
 **Mode**:
-Whether a connection is read or write. A read connection refuses every add, modify, delete, move and GPO change before anything is sent. The mode is the only limit the server puts on a write. ADR-0004.
+Whether a connection is read or write. A read connection refuses every add, modify, delete, move, ACL change and GPO change before anything is sent. The mode is the only limit the server puts on a write. ADR-0004.
 _Avoid_: Template, permission level
 
 **Logged-on user**:

@@ -8,11 +8,17 @@ declare const ad: {
   search(opts: { filter?: string; base?: string; scope?: "base" | "one" | "sub"; attributes?: string[]; max?: number; controls?: Controls }): Promise<{ entries: Entry[]; more: boolean }>;
   // The account the server runs as, and the PDC emulator it talks to.
   whoami(): Promise<{ user: string; pdc: string; defaultNamingContext: string }>;
-  // Writes. A read-mode connection refuses all four before anything is sent.
+  // Writes. A read-mode connection refuses these four before anything is sent.
   add(dn: string, attributes: Record<string, Value | Value[]>): Promise<{ dn: string }>;  // include objectClass
   modify(dn: string, changes: Array<{ op: "add" | "replace" | "delete"; attribute: string; values?: Value | Value[] }>, opts?: { controls?: Controls }): Promise<{ dn: string }>;
   delete(dn: string, opts?: { tree?: boolean }): Promise<{ dn: string }>;
   move(dn: string, to: { newParent?: string; newName?: string }): Promise<{ dn: string }>;  // newName is an RDN, e.g. "CN=New Name"
+  // Permissions. getAcl reads the owner and DACL, which needs no admin rights. A read-mode connection refuses addAce and removeAce.
+  getAcl(dn: string): Promise<{ dn: string; owner: Principal; protected: boolean; aces: Ace[] }>;
+  // objectType: an attribute, class or extended right name (find it with search) or a GUID. inheritedObjectType: a class.
+  addAce(dn: string, ace: NewAce): Promise<{ dn: string }>;
+  // Removes the entry that matches exactly; an Ace from getAcl can be passed back as it is. removed is false if none matched.
+  removeAce(dn: string, ace: NewAce | Ace): Promise<{ dn: string; removed: boolean }>;
 };
 // Group Policy, through Microsoft's GroupPolicy module on the PDC emulator. g is a GPO's name or id.
 // A read-mode connection refuses create, delete, link, unlink, set and remove.
@@ -37,6 +43,12 @@ interface Setting { key: string; valueName: string; type: string; value: unknown
 // Every attribute is an array. GUIDs and SIDs are strings; other binary values are { base64 }.
 interface Entry { dn: string; attributes: Record<string, Array<string | { base64: string }>> }
 type Value = string | number | boolean | { base64: string };
+interface Principal { sid: string; name: string | null }   // name e.g. "CONTOSO\\Helpdesk"
+// rights: e.g. "GenericAll", "ReadProperty", "WriteProperty", "ExtendedRight", "CreateChild", "DeleteChild", "Delete", "DeleteTree", "WriteDacl"
+// inheritance: "All" = this object and everything below it; "Descendents" = only below it.
+type Inheritance = "None" | "All" | "Descendents" | "SelfAndChildren" | "Children";
+interface Ace { principal: Principal; type: "allow" | "deny"; rights: string[]; objectType?: string; inheritedObjectType?: string; inheritance: Inheritance; inherited: boolean }
+interface NewAce { principal: string; type: "allow" | "deny"; rights: string[]; objectType?: string; inheritedObjectType?: string; inheritance?: Inheritance }  // principal: "CONTOSO\\Helpdesk" or a SID
 // showDeleted: see and restore objects in the Recycle Bin (CN=Deleted Objects). Restore = modify with it.
 interface Controls { showDeleted?: true }
 // Calls may run in parallel with Promise.all. Each run may make at most 200 calls.

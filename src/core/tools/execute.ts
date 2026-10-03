@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { CatalogueCache } from "../catalogue/catalogue.js";
 import type { ConnectionStore } from "../connections/store.js";
 import type { LdapBackend } from "../ldap/backend.js";
 import { BINDING_TYPES } from "../sandbox/binding-types.js";
@@ -10,7 +11,7 @@ import { DEFAULT_MAX_CHARS, capJson, shedToFit } from "./output.js";
 
 export const EXECUTE_DESCRIPTION = `Run a JavaScript script against one Active Directory domain. Use this for any read, filter, join, count, or change. Write the body of an async function and "return" the value you want back. Only what you return (and console.log) comes back to you, so filter and pick attributes inside the script. Output is capped at about 10,000 tokens.
 
-Every call runs as the Windows user the server runs as, over Kerberos with signing and sealing, against the domain's PDC emulator, so Active Directory's own permissions decide what succeeds. Use connections_list to find domain aliases. Name objects by DN. Pass your own attributes; without them you get name, objectClass and sAMAccountName. A connection added in read mode refuses add, modify, delete and move.
+Every call runs as the Windows user the server runs as, over Kerberos with signing and sealing, against the domain's PDC emulator, so Active Directory's own permissions decide what succeeds. Use connections_list to find domain aliases. Name objects by DN. Pass your own attributes; without them you get name, objectClass and sAMAccountName. A connection added in read mode refuses add, modify, delete, move, addAce and removeAce.
 
 Available in the script:
 ${BINDING_TYPES}
@@ -37,12 +38,23 @@ return await ad.modify("CN=Jane Doe,OU=Sales,DC=contoso,DC=local", [{ op: "repla
 const controls = { showDeleted: true };
 const gone = (await ad.search({ base: "CN=Deleted Objects,DC=contoso,DC=local", filter: "(&(isDeleted=TRUE)(sAMAccountName=jdoe))", attributes: ["lastKnownParent", "msDS-LastKnownRDN"], controls })).entries[0];
 const to = "CN=" + gone.attributes["msDS-LastKnownRDN"][0] + "," + gone.attributes.lastKnownParent[0];
-return await ad.modify(gone.dn, [{ op: "delete", attribute: "isDeleted" }, { op: "replace", attribute: "distinguishedName", values: to }], { controls });`;
+return await ad.modify(gone.dn, [{ op: "delete", attribute: "isDeleted" }, { op: "replace", attribute: "distinguishedName", values: to }], { controls });
+
+// Who can reset passwords in an OU: full control, all extended rights, or the Reset Password right
+const acl = await ad.getAcl("OU=Sales,DC=contoso,DC=local");
+return acl.aces.filter(a => a.type === "allow" && (a.rights.includes("GenericAll") || (a.rights.includes("ExtendedRight") && (!a.objectType || a.objectType === "User-Force-Change-Password")))).map(a => a.principal.name ?? a.principal.sid);
+
+// Protect an OU from accidental deletion, as the admin tools do. AD allows a delete with Delete on the object or
+// DeleteChild on its parent, so deny both. To undo, removeAce the first; the parent's deny also protects its other children.
+await ad.addAce("OU=Sales,DC=contoso,DC=local", { principal: "S-1-1-0", type: "deny", rights: ["Delete", "DeleteTree"] });
+return await ad.addAce("DC=contoso,DC=local", { principal: "S-1-1-0", type: "deny", rights: ["DeleteChild"] });`;
 
 export interface ExecuteDeps {
   store: Pick<ConnectionStore, "resolve">;
   backend: LdapBackend;
   sandbox: Pick<Sandbox, "run">;
+  /** Names the GUIDs in an ACL. Shared with search, so a domain's schema is read once. */
+  catalogues?: Pick<CatalogueCache, "get">;
 }
 
 const outputSchema = {
@@ -134,7 +146,7 @@ export function registerExecuteTool(server: McpServer, deps: ExecuteDeps): void 
           content: [{ type: "text", text: `No connection named "${domain}". Call connections_list to see aliases, or connection_add to add the domain.` }],
         };
       }
-      const { handle, calls } = makeBinding({ backend: deps.backend, connection });
+      const { handle, calls } = makeBinding({ backend: deps.backend, connection, catalogues: deps.catalogues });
       const run = await deps.sandbox.run(code, handle);
       const structured = shapeRunOutput(run, connection.domain, calls());
       const text = structured.truncated

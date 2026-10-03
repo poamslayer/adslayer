@@ -60,6 +60,9 @@ export const HOST_WORKER_SOURCE = [
   "    '  modify: function (dn, changes, opts) { return __call(\"modify\", [dn, changes, opts]); },',",
   "    '  delete: function (dn, opts) { return __call(\"delete\", [dn, opts]); },',",
   "    '  move: function (dn, to) { return __call(\"move\", [dn, to]); },',",
+  "    '  getAcl: function (dn) { return __call(\"getAcl\", [dn]); },',",
+  "    '  addAce: function (dn, ace) { return __call(\"addAce\", [dn, ace]); },',",
+  "    '  removeAce: function (dn, ace) { return __call(\"removeAce\", [dn, ace]); },',",
   "    '};',",
   "    'const gpo = {',",
   "    '  list: function () { return __call(\"gpo.list\", []); },',",
@@ -98,7 +101,7 @@ export const HOST_WORKER_SOURCE = [
  * A test in test/transport/stdio/miniflare-sandbox.test.ts pins this, so it fails if the
  * lines the module puts above the script ever change.
  */
-export const SANDBOX_SCRIPT_LINE_OFFSET = 46;
+export const SANDBOX_SCRIPT_LINE_OFFSET = 49;
 
 /**
  * Lines above the script for a sandbox built with this preamble. The breaks are counted rather
