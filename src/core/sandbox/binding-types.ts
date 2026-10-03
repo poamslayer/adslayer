@@ -25,7 +25,7 @@ declare const ad: {
 declare const gpo: {
   list(): Promise<Gpo[]>;
   // With where it is linked and every registry policy value it sets.
-  get(g: string): Promise<Gpo & { links: Link[]; computerSettings: Setting[]; userSettings: Setting[] }>;
+  get(g: string): Promise<Gpo & { links: Link[]; computerSettings: Setting[]; userSettings: Setting[]; securitySettings: SecuritySettings }>;
   create(name: string, opts?: { comment?: string }): Promise<Gpo>;
   delete(g: string): Promise<{ id: string; name: string; deleted: true }>;
   // Creates the link, or changes it if the GPO is already linked there. target is an OU or the domain DN.
@@ -40,6 +40,16 @@ declare const gpo: {
 interface Gpo { id: string; name: string; status: string; created: string; modified: string; computerVersion: number; userVersion: number; wmiFilter: string | null }
 interface Link { target: string; enabled: boolean; enforced: boolean; order: number }
 interface Setting { key: string; valueName: string; type: string; value: unknown }
+// From the GPO's security template (GptTmpl.inf). Read-only for now. Empty when the GPO sets none.
+interface SecuritySettings {
+  systemAccess: Record<string, number | string>;     // password and lockout policy, e.g. MinimumPasswordLength, LockoutBadCount
+  eventAudit: Record<string, number | string>;
+  privilegeRights: Record<string, GpoPrincipal[]>;   // user rights, e.g. SeInteractiveLogonRight
+  groupMembership: Array<{ group: GpoPrincipal; members?: GpoPrincipal[]; memberOf?: GpoPrincipal[] }>;  // Restricted Groups
+  registryValues: Record<string, { type: number; value: number | string }>;  // Security Options, keyed MACHINE\\...
+  other: Record<string, Record<string, string>>;
+}
+interface GpoPrincipal { sid: string | null; name: string | null }
 // Every attribute is an array. GUIDs and SIDs are strings; other binary values are { base64 }.
 interface Entry { dn: string; attributes: Record<string, Array<string | { base64: string }>> }
 type Value = string | number | boolean | { base64: string };

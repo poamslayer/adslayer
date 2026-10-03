@@ -592,6 +592,39 @@ function Read-RegistryPol([string]$path) {
     , $out.ToArray()
 }
 
+# A GPO's security template, MACHINE\Microsoft\Windows NT\SecEdit\GptTmpl.inf: an INI file that
+# Windows saves as UTF-16 with a BOM, which ReadAllLines follows. Each section's lines come back
+# in order as [key, value], with a name for every *S-1-... SID in them. The binding gives them
+# shape (src/core/sandbox/gpttmpl.ts). Issue #12.
+function Read-GptTmpl([string]$path) {
+    $sections = [ordered]@{}
+    $names = @{}
+    if (Test-Path -LiteralPath $path) {
+        $current = $null
+        foreach ($line in [IO.File]::ReadAllLines($path)) {
+            $t = $line.Trim()
+            if ($t -eq '' -or $t.StartsWith(';')) { continue }
+            if ($t -match '^\[(.+)\]$') {
+                $current = $Matches[1]
+                if (-not $sections.Contains($current)) { $sections[$current] = New-Object System.Collections.Generic.List[object] }
+                continue
+            }
+            if ($null -eq $current) { continue }
+            $eq = $t.IndexOf('=')
+            $key = if ($eq -lt 0) { $t } else { $t.Substring(0, $eq).Trim() }
+            $value = if ($eq -lt 0) { '' } else { $t.Substring($eq + 1).Trim() }
+            $sections[$current].Add(@($key, $value))
+            foreach ($m in [regex]::Matches("$key,$value", '\*(S-1-[0-9-]+)')) {
+                $sid = $m.Groups[1].Value
+                if ($names.ContainsKey($sid)) { continue }
+                $name = try { Get-SidName ([System.Security.Principal.SecurityIdentifier]::new($sid)) } catch { $null }
+                if ($name) { $names[$sid] = $name }
+            }
+        }
+    }
+    [ordered]@{ sections = $sections; names = $names }
+}
+
 function Invoke-GpoList($a) {
     Import-GroupPolicy
     $domain = [string]$a.domain
@@ -607,6 +640,7 @@ function Invoke-GpoGet($a) {
     # HKLM settings live under Machine, HKCU settings under User.
     $out.computerSettings = Read-RegistryPol "$root\Machine\Registry.pol"
     $out.userSettings = Read-RegistryPol "$root\User\Registry.pol"
+    $out.securityTemplate = Read-GptTmpl "$root\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
     $out
 }
 

@@ -28,6 +28,8 @@ return r.entries.map(e => e.attributes.sAMAccountName[0]);
 await gpo.set("Workstation Baseline", { key: "HKLM\\Software\\Policies\\Microsoft\\Windows\\Personalization", valueName: "NoLockScreen", type: "DWord", value: 1 });
 ```
 
+`gpo.get` also returns a GPO's security settings: password and lockout policy, user rights, Security Options, Restricted Groups and audit policy. These are read-only for now.
+
 ## Installation
 
 Follow these steps in order on the Windows machine where your AI agent runs. Each step says how to check it and how to fix it. Run the commands in PowerShell as yourself, not as an administrator, except where a step says otherwise.

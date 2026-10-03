@@ -275,6 +275,22 @@ await check("execute: gpo.get shows Lab Baseline's link and the value it sets", 
   return `${count} GPOs; Lab Baseline linked to OU=Lab, NoLockScreen = 1`;
 });
 
+// Issue #12: a GPO's security settings, from GptTmpl.inf.
+await check("execute: gpo.get reads password and lockout policy from the Default Domain Policy", async () => {
+  const out = await run("lab", `const s = (await gpo.get("Default Domain Policy")).securitySettings; return { sa: s.systemAccess, rights: Object.keys(s.privilegeRights).length };`);
+  must(out.ok, JSON.stringify(out.error));
+  const sa = out.result.sa;
+  must(typeof sa.MinimumPasswordLength === "number" && typeof sa.LockoutBadCount === "number", JSON.stringify(sa));
+  return `MinimumPasswordLength ${sa.MinimumPasswordLength}, LockoutBadCount ${sa.LockoutBadCount}, PasswordComplexity ${sa.PasswordComplexity}`;
+});
+
+await check("execute: gpo.get reads user rights by name from the Default Domain Controllers Policy", async () => {
+  const out = await run("lab", `return (await gpo.get("Default Domain Controllers Policy")).securitySettings.privilegeRights.SeInteractiveLogonRight;`);
+  must(out.ok, JSON.stringify(out.error));
+  must(out.result.some((p) => p.sid === "S-1-5-32-555" && p.name === "BUILTIN\\Remote Desktop Users"), JSON.stringify(out.result));
+  return out.result.map((p) => p.name ?? p.sid).join(", ");
+});
+
 await check("execute: a read connection refuses gpo.create before any call", async () => {
   const out = await run("lab", `await gpo.create("should not exist"); return "made";`);
   must(!out.ok && /read mode/.test(out.error.message) && out.calls.length === 0, JSON.stringify(out));
