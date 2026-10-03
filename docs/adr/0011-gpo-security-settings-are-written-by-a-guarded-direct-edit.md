@@ -1,6 +1,6 @@
 # GPO security settings are written by a guarded direct edit
 
-**Proposed on 2026-10-02, waiting for Arnold's decision.** This changes part of ADR-0007, which rejected editing `GptTmpl.inf` directly.
+This changes part of ADR-0007, which rejected editing `GptTmpl.inf` directly. Arnold chose this on 2026-10-02, after the lab experiments below.
 
 A GPO's security settings are in its security template, `Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf` in SYSVOL. They include password and lockout policy, user rights, Security Options and Restricted Groups. The GroupPolicy module can't write them, so ADR-0007 left them read-only. Issue #12 added reading them. This ADR covers how adslayer writes them.
 
