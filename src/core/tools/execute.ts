@@ -44,6 +44,10 @@ return await ad.modify(gone.dn, [{ op: "delete", attribute: "isDeleted" }, { op:
 const acl = await ad.getAcl("OU=Sales,DC=contoso,DC=local");
 return acl.aces.filter(a => a.type === "allow" && (a.rights.includes("GenericAll") || (a.rights.includes("ExtendedRight") && (!a.objectType || a.objectType === "User-Force-Change-Password")))).map(a => a.principal.name ?? a.principal.sid);
 
+// Password and lockout policy for the domain, from the Default Domain Policy's security settings
+const sa = (await gpo.get("Default Domain Policy")).securitySettings.systemAccess;
+return { minLength: sa.MinimumPasswordLength, lockoutAfter: sa.LockoutBadCount };
+
 // Protect an OU from accidental deletion, as the admin tools do. AD allows a delete with Delete on the object or
 // DeleteChild on its parent, so deny both. To undo, removeAce the first; the parent's deny also protects its other children.
 await ad.addAce("OU=Sales,DC=contoso,DC=local", { principal: "S-1-1-0", type: "deny", rights: ["Delete", "DeleteTree"] });

@@ -3,6 +3,7 @@ import { modeOf } from "../connections/store.js";
 import { LdapError, type LdapBackend } from "../ldap/backend.js";
 import type { AdCallRecord, Connection } from "../types.js";
 import { NO_NAMES, describeAce, encodeAce, needsCatalogue, type RawAce } from "./acl.js";
+import { shapeSecuritySettings, type SecurityTemplate } from "./gpttmpl.js";
 import type { BindingHandler } from "./sandbox.js";
 
 export interface BindingDeps {
@@ -135,7 +136,11 @@ export function makeBinding(deps: BindingDeps): { handle: BindingHandler; calls:
       }
       case "gpo.list":
         return send(op, "", {});
-      case "gpo.get":
+      case "gpo.get": {
+        const g = stringArg(args[0], "gpo");
+        const { securityTemplate, ...found } = (await send(op, g, { gpo: g })) as Record<string, unknown> & { securityTemplate?: SecurityTemplate };
+        return { ...found, securitySettings: shapeSecuritySettings(securityTemplate ?? { sections: {}, names: {} }) };
+      }
       case "gpo.delete": {
         const g = stringArg(args[0], "gpo");
         return send(op, g, { gpo: g });

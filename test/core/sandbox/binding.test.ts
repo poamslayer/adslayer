@@ -178,6 +178,19 @@ describe("the gpo binding", () => {
     ]);
   });
 
+  it("gpo.get turns the helper's security template into securitySettings", async () => {
+    const b = backend(() => ({
+      id: "x", name: "Default Domain Policy", links: [], computerSettings: [], userSettings: [],
+      securityTemplate: { sections: { "System Access": [["MinimumPasswordLength", "7"]], "Privilege Rights": [["SeBatchLogonRight", "*S-1-5-32-544"]] }, names: { "S-1-5-32-544": "BUILTIN\\Administrators" } },
+    }));
+    const g = (await makeBinding({ backend: b, connection: read }).handle("gpo.get", ["Default Domain Policy"])) as Record<string, unknown>;
+    expect(g).not.toHaveProperty("securityTemplate");
+    expect(g.securitySettings).toMatchObject({
+      systemAccess: { MinimumPasswordLength: 7 },
+      privilegeRights: { SeBatchLogonRight: [{ sid: "S-1-5-32-544", name: "BUILTIN\\Administrators" }] },
+    });
+  });
+
   it("shapes writes for the helper on a write connection", async () => {
     const b = backend(() => ({}));
     const { handle } = makeBinding({ backend: b, connection: write });
