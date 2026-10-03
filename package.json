@@ -1,6 +1,6 @@
 {
   "name": "adslayer",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "An MCP server that lets an AI agent read and change on-premises Active Directory, by writing short scripts that run in a sandbox. Runs on Windows as the logged-on user. Tools: docs, search, execute.",
   "author": "Arnold De La Vega",
   "repository": {
