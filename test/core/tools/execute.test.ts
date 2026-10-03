@@ -52,6 +52,23 @@ describe("execute", () => {
     await mcp.close();
   });
 
+  it("restores a deleted object with showDeleted on both the search and the modify", async () => {
+    const gone = { dn: "CN=Jane\\0ADEL:1,CN=Deleted Objects,DC=x", attributes: { lastKnownParent: ["OU=Lab,DC=x"], "msDS-LastKnownRDN": ["Jane"] } };
+    const { mcp, backend } = await connect(async (_d, op) => (op === "search" ? { entries: [gone], more: false } : { dn: "CN=Jane,OU=Lab,DC=x" }));
+    const res = await mcp.callTool({ name: "execute", arguments: { domain: "lab-w", code: `
+      const controls = { showDeleted: true };
+      const g = (await ad.search({ base: "CN=Deleted Objects,DC=x", filter: "(isDeleted=TRUE)", attributes: ["lastKnownParent", "msDS-LastKnownRDN"], controls })).entries[0];
+      return await ad.modify(g.dn, [{ op: "delete", attribute: "isDeleted" }, { op: "replace", attribute: "distinguishedName", values: "CN=" + g.attributes["msDS-LastKnownRDN"][0] + "," + g.attributes.lastKnownParent[0] }], { controls });` } });
+    expect((res.structuredContent as Out).result).toEqual({ dn: "CN=Jane,OU=Lab,DC=x" });
+    expect(backend.call.mock.calls[1][2]).toEqual({
+      dn: gone.dn,
+      changes: [{ op: "delete", attribute: "isDeleted" }, { op: "replace", attribute: "distinguishedName", values: "CN=Jane,OU=Lab,DC=x" }],
+      controls: { showDeleted: true },
+    });
+    expect(backend.call.mock.calls[0][2]).toMatchObject({ controls: { showDeleted: true } });
+    await mcp.close();
+  });
+
   it("writes through a write connection", async () => {
     const { mcp, backend } = await connect(async (_d, op) => (op === "modify" ? { dn: "CN=a,DC=x" } : {}));
     const res = await mcp.callTool({ name: "execute", arguments: { domain: "lab-w", code: `return await ad.modify("CN=a,DC=x", [{ op: "replace", attribute: "description", values: "hi" }]);` } });

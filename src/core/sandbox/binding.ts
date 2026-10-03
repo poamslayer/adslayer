@@ -48,8 +48,10 @@ export function makeBinding(deps: BindingDeps): { handle: BindingHandler; calls:
       case "get": {
         const dn = stringArg(args[0], "dn");
         const attributes = attributesArg(args[1]) ?? DEFAULT_ATTRIBUTES;
+        const opts = args[2] === undefined ? {} : objectArg(args[2], "get options");
+        const controls = controlsArg(opts.controls);
         try {
-          const found = (await send("search", dn, { base: dn, scope: "base", attributes, max: 1 })) as { entries: unknown[] };
+          const found = (await send("search", dn, { base: dn, scope: "base", attributes, max: 1, ...controls })) as { entries: unknown[] };
           return found.entries[0] ?? null;
         } catch (err) {
           if ((err as Error).message.startsWith("NoSuchObject:")) return null;
@@ -61,12 +63,14 @@ export function makeBinding(deps: BindingDeps): { handle: BindingHandler; calls:
         const attributes = attributesArg(opts.attributes) ?? DEFAULT_ATTRIBUTES;
         const scope = opts.scope ?? "sub";
         if (!["base", "one", "sub"].includes(scope as string)) throw new Error('scope must be "base", "one" or "sub"');
+        const controls = controlsArg(opts.controls);
         return send("search", typeof opts.base === "string" ? opts.base : "(domain head)", {
           ...(opts.base !== undefined ? { base: stringArg(opts.base, "base") } : {}),
           ...(opts.filter !== undefined ? { filter: stringArg(opts.filter, "filter") } : {}),
           scope,
           attributes,
           ...(opts.max !== undefined ? { max: numberArg(opts.max, "max") } : {}),
+          ...controls,
         });
       }
       case "whoami":
@@ -79,7 +83,8 @@ export function makeBinding(deps: BindingDeps): { handle: BindingHandler; calls:
         const dn = stringArg(args[0], "dn");
         const changes = args[1];
         if (!Array.isArray(changes) || changes.length === 0) throw new Error("modify needs a non-empty array of { op, attribute, values? }");
-        return send("modify", dn, { dn, changes });
+        const opts = args[2] === undefined ? {} : objectArg(args[2], "modify options");
+        return send("modify", dn, { dn, changes, ...controlsArg(opts.controls) });
       }
       case "delete": {
         const dn = stringArg(args[0], "dn");
@@ -151,6 +156,24 @@ export function makeBinding(deps: BindingDeps): { handle: BindingHandler; calls:
 /** How a read connection is made writable. ADR-0005. */
 export function writableHint(): string {
   return "Add the domain again with connection_add and mode: write.";
+}
+
+/**
+ * The LDAP controls a script may send, by name. A list, not raw OIDs, because some controls change
+ * how a call behaves in ways the helper does not handle, e.g. the notification control never returns.
+ * showDeleted (1.2.840.113556.1.4.417) shows objects in the Recycle Bin and allows restoring them.
+ */
+const CONTROLS: ReadonlySet<string> = new Set(["showDeleted"]);
+
+/** Spread into a helper request: nothing when no control is asked for. */
+function controlsArg(v: unknown): { controls?: Record<string, true> } {
+  if (v === undefined) return {};
+  const controls = objectArg(v, "controls");
+  for (const [name, value] of Object.entries(controls)) {
+    if (!CONTROLS.has(name)) throw new Error(`Unknown control "${name}". Known controls: ${[...CONTROLS].join(", ")}`);
+    if (value !== true) throw new Error(`${name} must be true`);
+  }
+  return Object.keys(controls).length ? { controls: controls as Record<string, true> } : {};
 }
 
 const GPO_TYPES: ReadonlySet<string> = new Set(["String", "ExpandString", "DWord", "QWord", "MultiString"]);

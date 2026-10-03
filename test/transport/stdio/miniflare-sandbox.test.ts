@@ -23,7 +23,7 @@ describe("MiniflareSandbox.run", () => {
     const r = await sandbox.run("const u = await ad.get('CN=a,DC=x', ['name']); return u.dn;", handler);
     expect(r.ok).toBe(true);
     expect(r.data).toBe("CN=a,DC=x");
-    expect(seen).toEqual([["get", "CN=a,DC=x", ["name"]]]);
+    expect(seen).toEqual([["get", "CN=a,DC=x", ["name"], undefined]]);
   });
 
   it("passes undefined for a missing optional argument", async () => {
@@ -33,7 +33,7 @@ describe("MiniflareSandbox.run", () => {
       return 1;
     };
     await sandbox.run("return ad.get('CN=a,DC=x');", handler);
-    expect(seen).toEqual([["CN=a,DC=x", undefined]]);
+    expect(seen).toEqual([["CN=a,DC=x", undefined, undefined]]);
   });
 
   it("allows several binding calls in flight at once", async () => {
