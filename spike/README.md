@@ -18,3 +18,11 @@ On the DC itself: `node spike/drive.mjs <pwsh.exe or powershell.exe> helper/adsl
 ```sh
 pwsh spike/run-e2e-on-lab.ps1
 ```
+
+## Writing GPO security settings (#13)
+
+`run-gpo-security-write.ps1` runs `gpo-security-write.ps1` on the DC three times: as `lab.da` on throwaway `adslayer-proto-*` GPOs, as `lab.delegated` on Lab Baseline, and as `lab.da` again to check that nothing is left. It compares two ways of writing `GptTmpl.inf`: back up, edit, `Import-GPO`, against a direct edit with version and extension bookkeeping. The results are in ADR-0011. The script also puts the DC's `SeTimeZonePrivilege` back afterwards, because a user right from a deleted GPO stays set.
+
+```sh
+pwsh spike/run-gpo-security-write.ps1
+```
