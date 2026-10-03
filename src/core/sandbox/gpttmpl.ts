@@ -27,12 +27,12 @@ export interface SecuritySettings {
 const DROPPED = new Set(["Unicode", "Version"]);
 
 /** A whole number as a number; anything else as text, without the quotes the template puts round names. */
-function scalar(v: string): number | string {
+export function scalar(v: string): number | string {
   if (/^-?\d+$/.test(v)) return Number(v);
   return /^".*"$/.test(v) ? v.slice(1, -1) : v;
 }
 
-function principal(entry: string, names: Record<string, string>): Principal {
+export function principal(entry: string, names: Record<string, string>): Principal {
   const e = entry.trim();
   if (e.startsWith("*")) {
     const sid = e.slice(1);
@@ -43,6 +43,14 @@ function principal(entry: string, names: Record<string, string>): Principal {
 
 function principals(list: string, names: Record<string, string>): Principal[] {
   return list.split(",").map((p) => p.trim()).filter(Boolean).map((p) => principal(p, names));
+}
+
+/** A [Registry Values] value, "type,value". A string value may hold commas, so only the first comma splits. */
+export function registryValue(raw: string): { type: number; value: number | string } {
+  const at = raw.indexOf(",");
+  const type = Number(raw.slice(0, at));
+  const rest = at === -1 ? "" : raw.slice(at + 1);
+  return { type, value: type === 4 && /^-?\d+$/.test(rest) ? Number(rest) : /^".*"$/.test(rest) ? rest.slice(1, -1) : rest };
 }
 
 export function shapeSecuritySettings(raw: SecurityTemplate): SecuritySettings {
@@ -74,14 +82,9 @@ export function shapeSecuritySettings(raw: SecurityTemplate): SecuritySettings {
           g[m[2].toLowerCase() === "members" ? "members" : "memberOf"] = principals(value, raw.names);
           break;
         }
-        case "Registry Values": {
-          // "type,value". A string value may hold commas, so only the first comma splits.
-          const at = value.indexOf(",");
-          const type = Number(value.slice(0, at));
-          const rest = at === -1 ? "" : value.slice(at + 1);
-          out.registryValues[key] = { type, value: type === 4 && /^-?\d+$/.test(rest) ? Number(rest) : /^".*"$/.test(rest) ? rest.slice(1, -1) : rest };
+        case "Registry Values":
+          out.registryValues[key] = registryValue(value);
           break;
-        }
         default:
           (out.other[section] ??= {})[key] = value;
       }

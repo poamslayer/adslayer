@@ -21,7 +21,7 @@ declare const ad: {
   removeAce(dn: string, ace: NewAce | Ace): Promise<{ dn: string; removed: boolean }>;
 };
 // Group Policy, through Microsoft's GroupPolicy module on the PDC emulator. g is a GPO's name or id.
-// A read-mode connection refuses create, delete, link, unlink, set and remove.
+// A read-mode connection refuses create, delete, link, unlink, set, remove, grant, revoke and setSecurity.
 declare const gpo: {
   list(): Promise<Gpo[]>;
   // With where it is linked and every registry policy value it sets.
@@ -36,11 +36,19 @@ declare const gpo: {
   remove(g: string, key: string, valueName?: string): Promise<unknown>;
   // Backup-GPO to a folder on the machine adslayer runs on. Allowed on a read connection.
   backup(g: string, path: string): Promise<{ id: string; backupId: string; path: string; timestamp: string }>;
+  // Security settings (GptTmpl.inf, ADR-0011). Each changes one thing and answers with what was there before.
+  // A GPO that defines a user right REPLACES the whole list on the computers it applies to. So granting on a right
+  // the GPO doesn't define yet (defined: "new") leaves only that principal: grant everyone who should keep it.
+  // Revoking the last principal undefines the right (defined: false); computers keep their last list until another GPO sets it.
+  grant(g: string, right: string, principal: string): Promise<RightChange>;   // right e.g. "SeServiceLogonRight"; principal "CONTOSO\\svc-web" or a SID
+  revoke(g: string, right: string, principal: string): Promise<RightChange>;
+  setSecurity(g: string, section: "System Access", key: string, value: number | string): Promise<SecurityChange>;   // e.g. "MinimumPasswordLength", 14
+  setSecurity(g: string, section: "Registry Values", key: string, value: { type: 1 | 2 | 4 | 7; value: number | string | string[] }): Promise<SecurityChange>;  // key MACHINE\\...
 };
 interface Gpo { id: string; name: string; status: string; created: string; modified: string; computerVersion: number; userVersion: number; wmiFilter: string | null }
 interface Link { target: string; enabled: boolean; enforced: boolean; order: number }
 interface Setting { key: string; valueName: string; type: string; value: unknown }
-// From the GPO's security template (GptTmpl.inf). Read-only for now. Empty when the GPO sets none.
+// From the GPO's security template (GptTmpl.inf). Empty when the GPO sets none.
 interface SecuritySettings {
   systemAccess: Record<string, number | string>;     // password and lockout policy, e.g. MinimumPasswordLength, LockoutBadCount
   eventAudit: Record<string, number | string>;
@@ -50,6 +58,8 @@ interface SecuritySettings {
   other: Record<string, Record<string, string>>;
 }
 interface GpoPrincipal { sid: string | null; name: string | null }
+interface RightChange { id: string; right: string; principal: GpoPrincipal; changed: boolean; defined: boolean | "new"; before: GpoPrincipal[]; after: GpoPrincipal[] }
+interface SecurityChange { id: string; section: string; key: string; changed: boolean; before: unknown; after: unknown }
 // Every attribute is an array. GUIDs and SIDs are strings; other binary values are { base64 }.
 interface Entry { dn: string; attributes: Record<string, Array<string | { base64: string }>> }
 type Value = string | number | boolean | { base64: string };

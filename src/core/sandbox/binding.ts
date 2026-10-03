@@ -3,7 +3,7 @@ import { modeOf } from "../connections/store.js";
 import { LdapError, type LdapBackend } from "../ldap/backend.js";
 import type { AdCallRecord, Connection } from "../types.js";
 import { NO_NAMES, describeAce, encodeAce, needsCatalogue, type RawAce } from "./acl.js";
-import { shapeSecuritySettings, type SecurityTemplate } from "./gpttmpl.js";
+import { principal, registryValue, scalar, shapeSecuritySettings, type SecurityTemplate } from "./gpttmpl.js";
 import type { BindingHandler } from "./sandbox.js";
 
 export interface BindingDeps {
@@ -19,6 +19,7 @@ export const DEFAULT_ATTRIBUTES = ["name", "objectClass", "sAMAccountName"];
 const WRITE_OPS: ReadonlySet<string> = new Set([
   "add", "modify", "delete", "move", "addAce", "removeAce",
   "gpo.create", "gpo.delete", "gpo.link", "gpo.unlink", "gpo.set", "gpo.remove",
+  "gpo.grant", "gpo.revoke", "gpo.setSecurity",
 ]);
 
 export function makeBinding(deps: BindingDeps): { handle: BindingHandler; calls: () => AdCallRecord[] } {
@@ -178,6 +179,29 @@ export function makeBinding(deps: BindingDeps): { handle: BindingHandler; calls:
         const g = stringArg(args[0], "gpo");
         return send(op, g, { gpo: g, key: registryKeyArg(args[1]), ...(args[2] !== undefined ? { valueName: stringArg(args[2], "valueName") } : {}) });
       }
+      case "gpo.grant":
+      case "gpo.revoke": {
+        const g = stringArg(args[0], "gpo");
+        const right = stringArg(args[1], "right");
+        if (!/^Se\w+(Right|Privilege)$/.test(right)) throw new Error(`right must be a user right such as "SeServiceLogonRight", not "${right}"`);
+        if (typeof args[2] !== "string" || args[2].length === 0) throw new Error('principal must be a name like "CONTOSO\\svc-web" or a SID');
+        const r = (await send(op, g, { gpo: g, right, principal: args[2] })) as {
+          id: string; right: string; sid: string; changed: boolean; defined: boolean | "new"; before: string[]; after: string[]; names: Record<string, string>;
+        };
+        return {
+          id: r.id, right: r.right, principal: principal(`*${r.sid}`, r.names), changed: r.changed, defined: r.defined,
+          before: r.before.map((e) => principal(e, r.names)), after: r.after.map((e) => principal(e, r.names)),
+        };
+      }
+      case "gpo.setSecurity": {
+        const g = stringArg(args[0], "gpo");
+        const section = stringArg(args[1], "section");
+        const key = stringArg(args[2], "key");
+        const value = encodeSecurityValue(section, key, args[3]);
+        const r = (await send(op, g, { gpo: g, section, key, value })) as { id: string; section: string; key: string; changed: boolean; before: string | null; after: string };
+        const read = section === "Registry Values" ? registryValue : scalar;
+        return { id: r.id, section: r.section, key: r.key, changed: r.changed, before: r.before === null ? null : read(r.before), after: read(r.after) };
+      }
       case "gpo.backup": {
         const g = stringArg(args[0], "gpo");
         return send(op, g, { gpo: g, path: stringArg(args[1], "path") });
@@ -211,6 +235,48 @@ function controlsArg(v: unknown): { controls?: Record<string, true> } {
     if (value !== true) throw new Error(`${name} must be true`);
   }
   return Object.keys(controls).length ? { controls: controls as Record<string, true> } : {};
+}
+
+/** [System Access] keys a GPO can set. A list, so a misspelled key is an error and not a setting nothing reads. */
+const SYSTEM_ACCESS_KEYS: ReadonlySet<string> = new Set([
+  "MinimumPasswordAge", "MaximumPasswordAge", "MinimumPasswordLength", "PasswordComplexity", "PasswordHistorySize",
+  "LockoutBadCount", "ResetLockoutCount", "LockoutDuration", "RequireLogonToChangePassword", "ForceLogoffWhenHourExpire",
+  "ClearTextPassword", "LSAAnonymousNameLookup", "EnableAdminAccount", "EnableGuestAccount", "NewAdministratorName", "NewGuestName",
+]);
+const NAME_KEYS: ReadonlySet<string> = new Set(["NewAdministratorName", "NewGuestName"]);
+
+/** A setSecurity value as GptTmpl.inf writes it: 14, "Admin", 4,1, 1,"text" or 7,a,b. */
+function encodeSecurityValue(section: string, key: string, value: unknown): string {
+  const noQuote = (v: string) => {
+    if (v.includes('"')) throw new Error("a value cannot contain a double quote");
+    return v;
+  };
+  if (section === "System Access") {
+    if (!SYSTEM_ACCESS_KEYS.has(key)) throw new Error(`Unknown System Access key "${key}". Keys: ${[...SYSTEM_ACCESS_KEYS].join(", ")}`);
+    if (NAME_KEYS.has(key)) return `"${noQuote(stringArg(value, key))}"`;
+    if (typeof value !== "number" || !Number.isInteger(value)) throw new Error(`${key} must be a whole number`);
+    return String(value);
+  }
+  if (section === "Registry Values") {
+    if (!/^MACHINE\\/i.test(key)) throw new Error("key must start with MACHINE\\, e.g. MACHINE\\System\\CurrentControlSet\\Control\\Lsa\\LimitBlankPasswordUse");
+    const v = objectArg(value, "value");
+    switch (v.type) {
+      case 4:
+        if (typeof v.value !== "number" || !Number.isInteger(v.value)) throw new Error("a type 4 (DWORD) value must be a whole number");
+        return `4,${v.value}`;
+      case 1:
+      case 2:
+        return `${v.type},"${noQuote(stringArg(v.value, "value"))}"`;
+      case 7: {
+        if (!Array.isArray(v.value) || !v.value.every((x) => typeof x === "string")) throw new Error("a type 7 (multi-string) value must be an array of strings");
+        if (v.value.some((x: string) => x.includes(","))) throw new Error("a type 7 value's strings cannot contain a comma, because the template separates them with commas");
+        return `7,${(v.value as string[]).map(noQuote).join(",")}`;
+      }
+      default:
+        throw new Error("type must be 1, 2, 4 or 7 (string, expandable string, DWORD, multi-string)");
+    }
+  }
+  throw new Error('section must be "System Access" or "Registry Values"');
 }
 
 const GPO_TYPES: ReadonlySet<string> = new Set(["String", "ExpandString", "DWord", "QWord", "MultiString"]);
