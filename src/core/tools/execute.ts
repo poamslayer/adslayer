@@ -48,6 +48,11 @@ return acl.aces.filter(a => a.type === "allow" && (a.rights.includes("GenericAll
 const sa = (await gpo.get("Default Domain Policy")).securitySettings.systemAccess;
 return { minLength: sa.MinimumPasswordLength, lockoutAfter: sa.LockoutBadCount };
 
+// Let a service account log on as a service through a GPO. If the GPO doesn't define the right yet, granting
+// defines it with only this account on every computer it applies to, so read who holds it first.
+const before = (await gpo.get("Web Servers")).securitySettings.privilegeRights.SeServiceLogonRight;
+return await gpo.grant("Web Servers", "SeServiceLogonRight", "CONTOSO\\svc-web");   // { changed, defined, before, after }
+
 // Protect an OU from accidental deletion, as the admin tools do. AD allows a delete with Delete on the object or
 // DeleteChild on its parent, so deny both. To undo, removeAce the first; the parent's deny also protects its other children.
 await ad.addAce("OU=Sales,DC=contoso,DC=local", { principal: "S-1-1-0", type: "deny", rights: ["Delete", "DeleteTree"] });

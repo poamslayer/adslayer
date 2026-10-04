@@ -284,3 +284,64 @@ describe("the ACL methods", () => {
     expect(b.call).not.toHaveBeenCalled();
   });
 });
+
+describe("the GPO security write methods (ADR-0011)", () => {
+  const rightAnswer = { id: "g1", right: "SeServiceLogonRight", sid: "S-1-5-21-1-2-3-1150", changed: true, defined: "new", before: [], after: ["*S-1-5-21-1-2-3-1150"], names: { "S-1-5-21-1-2-3-1150": "LAB\\svc-web" } };
+
+  it.each([
+    ["gpo.grant", ["Servers", "SeServiceLogonRight", "LAB\\svc-web"]],
+    ["gpo.revoke", ["Servers", "SeServiceLogonRight", "LAB\\svc-web"]],
+    ["gpo.setSecurity", ["Servers", "System Access", "MinimumPasswordLength", 14]],
+  ])("a read connection refuses %s before anything is sent (ADR-0004)", async (op, args) => {
+    const b = backend();
+    await expect(makeBinding({ backend: b, connection: read }).handle(op, args)).rejects.toThrow(/read mode/);
+    expect(b.call).not.toHaveBeenCalled();
+  });
+
+  it("grant sends the right and principal, and names the principals in the answer", async () => {
+    const b = backend(() => rightAnswer);
+    const out = await makeBinding({ backend: b, connection: write }).handle("gpo.grant", ["Servers", "SeServiceLogonRight", "LAB\\svc-web"]);
+    expect(b.call.mock.calls[0][1]).toBe("gpo.grant");
+    expect(b.call.mock.calls[0][2]).toEqual({ gpo: "Servers", right: "SeServiceLogonRight", principal: "LAB\\svc-web" });
+    expect(out).toEqual({
+      id: "g1", right: "SeServiceLogonRight", principal: { sid: "S-1-5-21-1-2-3-1150", name: "LAB\\svc-web" },
+      changed: true, defined: "new", before: [], after: [{ sid: "S-1-5-21-1-2-3-1150", name: "LAB\\svc-web" }],
+    });
+  });
+
+  it.each([
+    [["System Access", "MinimumPasswordLength", 14], "14"],
+    [["System Access", "NewAdministratorName", "LabAdmin"], '"LabAdmin"'],
+    [["Registry Values", "MACHINE\\System\\X\\RequireSecuritySignature", { type: 4, value: 1 }], "4,1"],
+    [["Registry Values", "MACHINE\\Software\\X\\LegalNoticeCaption", { type: 1, value: "Notice" }], '1,"Notice"'],
+    [["Registry Values", "MACHINE\\System\\X\\Machine", { type: 7, value: ["System\\A", "System\\B"] }], "7,System\\A,System\\B"],
+  ])("setSecurity %j sends the value as the template writes it", async (args, encoded) => {
+    const b = backend((_op, a) => ({ id: "g1", section: a.section, key: a.key, changed: true, before: null, after: a.value }));
+    await makeBinding({ backend: b, connection: write }).handle("gpo.setSecurity", ["Servers", ...args]);
+    expect(b.call.mock.calls[0][2]).toEqual({ gpo: "Servers", section: args[0], key: args[1], value: encoded });
+  });
+
+  it("setSecurity answers with the old and new values in readable form", async () => {
+    const b = backend(() => ({ id: "g1", section: "Registry Values", key: "MACHINE\\X", changed: true, before: "4,0", after: "4,1" }));
+    expect(await makeBinding({ backend: b, connection: write }).handle("gpo.setSecurity", ["Servers", "Registry Values", "MACHINE\\X", { type: 4, value: 1 }])).toEqual({
+      id: "g1", section: "Registry Values", key: "MACHINE\\X", changed: true, before: { type: 4, value: 0 }, after: { type: 4, value: 1 },
+    });
+  });
+
+  it.each([
+    ["gpo.grant", ["Servers", "Log on as a service", "LAB\\x"], /right must be a user right/],
+    ["gpo.grant", ["Servers", "SeServiceLogonRight", ""], /principal must be/],
+    ["gpo.setSecurity", ["Servers", "Event Audit", "AuditLogonEvents", 3], /section must be/],
+    ["gpo.setSecurity", ["Servers", "System Access", "MinPasswordLength", 14], /Unknown System Access key "MinPasswordLength"/],
+    ["gpo.setSecurity", ["Servers", "System Access", "MinimumPasswordLength", 1.5], /whole number/],
+    ["gpo.setSecurity", ["Servers", "System Access", "MinimumPasswordLength", "14"], /whole number/],
+    ["gpo.setSecurity", ["Servers", "Registry Values", "SOFTWARE\\X", { type: 4, value: 1 }], /MACHINE\\/],
+    ["gpo.setSecurity", ["Servers", "Registry Values", "MACHINE\\X", { type: 3, value: "00" }], /type must be 1, 2, 4 or 7/],
+    ["gpo.setSecurity", ["Servers", "Registry Values", "MACHINE\\X", { type: 7, value: ["a,b"] }], /comma/],
+    ["gpo.setSecurity", ["Servers", "Registry Values", "MACHINE\\X", { type: 1, value: 'say "hi"' }], /quote/],
+  ])("rejects a malformed %s %j without sending it", async (op, args, message) => {
+    const b = backend();
+    await expect(makeBinding({ backend: b, connection: write }).handle(op, args)).rejects.toThrow(message);
+    expect(b.call).not.toHaveBeenCalled();
+  });
+});

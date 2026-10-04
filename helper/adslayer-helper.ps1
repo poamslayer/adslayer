@@ -762,6 +762,234 @@ function Invoke-PolicyDefinitions($a) {
     [ordered]@{ source = $dir; policies = $out.ToArray() }
 }
 
+# --- Editing a security template (ADR-0011) --------------------------------------------------
+#
+# Text in, text out: these change one key and leave every other line as it was (guardrail 1).
+# Lines are joined with CRLF, as Windows writes them.
+
+$InfSkeleton = @('[Unicode]', 'Unicode=yes', '[Version]', 'signature="$CHICAGO$"', 'Revision=1')
+
+# The line range of a section: Header is the [Section] line, End is the next header or the end.
+function Find-InfSection([string[]]$lines, [string]$section) {
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -ieq "[$section]") {
+            $end = $i + 1
+            while ($end -lt $lines.Count -and $lines[$end].Trim() -notmatch '^\[.+\]$') { $end++ }
+            return @{ Header = $i; End = $end }
+        }
+    }
+    $null
+}
+
+function Find-InfKey([string[]]$lines, $range, [string]$key) {
+    for ($i = $range.Header + 1; $i -lt $range.End; $i++) {
+        $eq = $lines[$i].IndexOf('=')
+        if ($eq -gt 0 -and $lines[$i].Substring(0, $eq).Trim() -ieq $key) { return $i }
+    }
+    -1
+}
+
+function Get-InfValue([string]$text, [string]$section, [string]$key) {
+    $lines = $text -split "\r?\n"
+    $range = Find-InfSection $lines $section
+    if (-not $range) { return $null }
+    $at = Find-InfKey $lines $range $key
+    if ($at -lt 0) { return $null }
+    $lines[$at].Substring($lines[$at].IndexOf('=') + 1).Trim()
+}
+
+# Sets one key, or removes its line when $value is $null (left untyped: [string] would turn $null
+# into ''). Registry Values lines are written key=value, the others key = value, as Windows does.
+function Set-InfValue([string]$text, [string]$section, [string]$key, $value) {
+    $lines = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrEmpty($text)) {
+        if ($null -eq $value) { return $text }
+        $lines.AddRange([string[]]$InfSkeleton); $lines.Add('')
+    } else { $lines.AddRange([string[]]($text -split "\r?\n")) }
+    $sep = if ($section -ieq 'Registry Values') { '=' } else { ' = ' }
+    $range = Find-InfSection $lines.ToArray() $section
+    $at = if ($range) { Find-InfKey $lines.ToArray() $range $key } else { -1 }
+    if ($null -eq $value) {
+        if ($at -lt 0) { return $text }
+        $lines.RemoveAt($at)
+    } elseif ($at -ge 0) {
+        $lines[$at] = $lines[$at].Substring(0, $lines[$at].IndexOf('=')).Trim() + $sep + $value
+    } elseif ($range) {
+        # After the section's last non-blank line, so a blank line before the next header stays put.
+        $insert = $range.End
+        while ($insert -gt $range.Header + 1 -and $lines[$insert - 1].Trim() -eq '') { $insert-- }
+        $lines.Insert($insert, "$key$sep$value")
+    } else {
+        $insert = if ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') { $lines.Count - 1 } else { $lines.Count }
+        $lines.InsertRange($insert, [string[]]@("[$section]", "$key$sep$value"))
+    }
+    $lines.ToArray() -join "`r`n"
+}
+
+# A user right's list with one SID added or removed. Entries are *S-1-... or account names; a name
+# that resolves to the SID counts as the SID. The other entries keep their order.
+function Edit-RightList([string]$current, [string]$sid, [bool]$grant) {
+    $entries = @($current -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $same = {
+        param($entry)
+        if ($entry.StartsWith('*')) { return $entry.Substring(1) -ieq $sid }
+        try { (Resolve-Principal $entry).Value -ieq $sid } catch { $false }
+    }
+    $matched = @($entries | Where-Object { & $same $_ })
+    if ($grant) {
+        if ($matched.Count -gt 0) { return ($entries -join ',') }
+        return ((@($entries) + "*$sid") -join ',')
+    }
+    (@($entries | Where-Object { -not (& $same $_) }) -join ',')
+}
+
+$SecurityCsePair = '[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]'
+
+# Where a GPO stands: its version in AD and in GPT.INI, its extensions, and its security template.
+# Paths go to SYSVOL on the PDC emulator, as every call does (ADR-0006).
+function Get-GpoSecurityState($t) {
+    $id = $t.Gpo.Id.ToString()
+    $gpcDn = "CN={$id},CN=Policies,CN=System,$((Get-Connection $t.Domain).DefaultNamingContext)"
+    $req = New-SearchRequest $gpcDn '(objectClass=*)' ([System.DirectoryServices.Protocols.SearchScope]::Base) @('versionNumber', 'gPCMachineExtensionNames')
+    $e = (Send-Request $t.Domain $req).Entries[0]
+    $cse = ''
+    if ($e.Attributes['gPCMachineExtensionNames']) { $cse = [string]$e.Attributes['gPCMachineExtensionNames'][0] }
+    $root = "\\$($t.Server)\SYSVOL\$($t.Domain)\Policies\{$id}"
+    $ini = "$root\GPT.INI"
+    $iniLines = @()
+    if (Test-Path -LiteralPath $ini) { $iniLines = @([IO.File]::ReadAllLines($ini)) }
+    $iniVersion = 0
+    foreach ($l in $iniLines) { if ($l -match '^\s*Version\s*=\s*(\d+)\s*$') { $iniVersion = [long]$Matches[1] } }
+    $inf = "$root\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+    $exists = Test-Path -LiteralPath $inf
+    $text = ''
+    if ($exists) { $text = [IO.File]::ReadAllText($inf) }
+    @{ Id = $id; GpcDn = $gpcDn; Version = [long]$e.Attributes['versionNumber'][0]; Cse = $cse
+       IniPath = $ini; IniLines = $iniLines; IniVersion = $iniVersion; InfPath = $inf; InfExists = $exists; Text = $text }
+}
+
+# Applies $change (old template text in, new text out) under ADR-0011's guardrails. Returns
+# @{ Changed; Text }. -BeforeVersionBump runs between writing the file and raising the version;
+# only spike/gpo-security-guard.ps1 passes it, to stand for someone else editing the GPO.
+function Write-GpoSecurity($t, [scriptblock]$change, [scriptblock]$BeforeVersionBump = $null) {
+    $s = Get-GpoSecurityState $t
+    # Guardrail 3: a GPO whose two versions already disagree is out of step; don't add to it.
+    if ($s.Version -ne $s.IniVersion) {
+        throw [HelperError]::new('GpoVersionMismatch', "GPO {$($s.Id)} has version $($s.Version) in AD and $($s.IniVersion) in GPT.INI, so it is already out of step. Nothing was changed. Open it in GPMC and save it, or ask its owner, before changing its security settings (ADR-0011).")
+    }
+    $newText = & $change $s.Text
+    if ($newText -ceq $s.Text) { return @{ Changed = $false; Text = $s.Text } }
+
+    # Guardrail 2: UTF-16 with a BOM, as Windows saves it.
+    New-Item -ItemType Directory -Force -Path (Split-Path $s.InfPath) | Out-Null
+    [IO.File]::WriteAllText($s.InfPath, $newText, [Text.Encoding]::Unicode)
+    if ($BeforeVersionBump) { & $BeforeVersionBump }
+
+    # Guardrails 4, 5 and 6 in one modify: deleting versionNumber=V fails if someone else raised it
+    # since it was read, so the version only moves if nobody else got there first.
+    $next = $s.Version + 1
+    $pairs = @([regex]::Matches($s.Cse, '\[[^\]]+\]') | ForEach-Object { $_.Value })
+    if ($pairs -notcontains $SecurityCsePair) { $pairs += $SecurityCsePair }
+    $req = New-Object "$Sdp.ModifyRequest"
+    $req.DistinguishedName = $s.GpcDn
+    foreach ($m in @(
+        @{ Name = 'versionNumber'; Op = 'Delete'; Value = [string]$s.Version },
+        @{ Name = 'versionNumber'; Op = 'Add'; Value = [string]$next },
+        @{ Name = 'gPCMachineExtensionNames'; Op = 'Replace'; Value = (($pairs | Sort-Object) -join '') })) {
+        $mod = New-Object "$Sdp.DirectoryAttributeModification"
+        $mod.Name = $m.Name
+        $mod.Operation = [System.DirectoryServices.Protocols.DirectoryAttributeOperation]::($m.Op)
+        [void]$mod.Add([string]$m.Value)
+        [void]$req.Modifications.Add($mod)
+    }
+    try {
+        [void](Send-Request $t.Domain $req)
+    } catch {
+        $err = $_
+        # Put the old template back, but only if the file is still ours: if someone else wrote it in
+        # the meantime, theirs stays.
+        if ((Test-Path -LiteralPath $s.InfPath) -and [IO.File]::ReadAllText($s.InfPath) -ceq $newText) {
+            if ($s.InfExists) { [IO.File]::WriteAllText($s.InfPath, $s.Text, [Text.Encoding]::Unicode) }
+            else { Remove-Item -LiteralPath $s.InfPath -ErrorAction SilentlyContinue }
+        }
+        $ex = Get-InnerException $err.Exception
+        if ($ex -is [System.DirectoryServices.Protocols.DirectoryOperationException] -and $ex.Response -and [string]$ex.Response.ResultCode -in 'NoSuchAttribute', 'AttributeOrValueExists', 'ConstraintViolation') {
+            throw [HelperError]::new('GpoChanged', "GPO {$($s.Id)} changed while adslayer was writing it (its version is no longer $($s.Version)). Nothing was changed. Read it again and retry.")
+        }
+        throw $err
+    }
+
+    # GPT.INI follows AD, keeping its other lines.
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.AddRange([string[]]$s.IniLines)
+    $at = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^\s*Version\s*=') { $at = $i } }
+    if ($at -ge 0) { $lines[$at] = "Version=$next" }
+    else {
+        if (-not ($lines | Where-Object { $_.Trim() -ieq '[General]' })) { $lines.Add('[General]') }
+        $lines.Add("Version=$next")
+    }
+    [IO.File]::WriteAllText($s.IniPath, (($lines.ToArray() -join "`r`n") + "`r`n"), [Text.Encoding]::ASCII)
+
+    # Guardrail 7: read it back.
+    if ([IO.File]::ReadAllText($s.InfPath) -cne $newText) {
+        throw [HelperError]::new('GpoWriteNotVerified', "GPO {$($s.Id)}'s security template did not read back as written. Check it in GPMC.")
+    }
+    @{ Changed = $true; Text = $newText }
+}
+
+function Get-RightEntries($value) { @(([string]$value) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+
+# gpo.grant and gpo.revoke: one principal on one user right. Revoking the last principal removes the
+# right's line, so the GPO no longer defines it (decided 2026-10-03).
+function Invoke-GpoRight($a, [bool]$grant) {
+    $t = Get-GpoTarget $a
+    $right = [string]$a.right
+    if ($right -notmatch '^Se\w+(Right|Privilege)$') { throw [HelperError]::new('BadRequest', "right must be a user right such as SeServiceLogonRight, not '$right'") }
+    $sid = (Resolve-Principal ([string]$a.principal)).Value
+    $r = @{ Before = $null; After = $null }
+    $w = Write-GpoSecurity $t {
+        param($text)
+        $r.Before = Get-InfValue $text 'Privilege Rights' $right
+        if ($null -eq $r.Before -and -not $grant) { $r.After = $null; return $text }
+        $list = Edit-RightList ([string]$r.Before) $sid $grant
+        $r.After = if ($list -eq '') { $null } else { $list }
+        if ($null -ne $r.Before -and $r.After -ceq $r.Before) { return $text }
+        Set-InfValue $text 'Privilege Rights' $right $r.After
+    }
+    # @() because a function's output unrolls: one entry would arrive as a string, none as $null.
+    $before = @(Get-RightEntries $r.Before)
+    $after = @(Get-RightEntries $r.After)
+    $names = @{}
+    foreach ($entry in @($before) + @($after) + "*$sid") {
+        if ($entry.StartsWith('*') -and -not $names.ContainsKey($entry.Substring(1))) {
+            $n = try { Get-SidName ([System.Security.Principal.SecurityIdentifier]::new($entry.Substring(1))) } catch { $null }
+            if ($n) { $names[$entry.Substring(1)] = $n }
+        }
+    }
+    $defined = if ($null -eq $r.After) { $false } elseif ($null -eq $r.Before) { 'new' } else { $true }
+    [ordered]@{ id = $t.Gpo.Id.ToString(); right = $right; sid = $sid; changed = $w.Changed; defined = $defined; before = $before; after = $after; names = $names }
+}
+
+# gpo.setSecurity: one key in [System Access] or [Registry Values]. The binding has checked the key
+# and encoded the value as the template writes it, e.g. 14, "Admin" or 4,1.
+function Invoke-GpoSetSecurity($a) {
+    $t = Get-GpoTarget $a
+    $section = [string]$a.section
+    if ($section -notin 'System Access', 'Registry Values') { throw [HelperError]::new('BadRequest', 'section must be System Access or Registry Values') }
+    if (-not $a.key -or $null -eq $a.value) { throw [HelperError]::new('BadRequest', 'setSecurity needs key and value') }
+    $key = [string]$a.key
+    $value = [string]$a.value
+    $r = @{ Before = $null }
+    $w = Write-GpoSecurity $t {
+        param($text)
+        $r.Before = Get-InfValue $text $section $key
+        if ($r.Before -ceq $value) { return $text }
+        Set-InfValue $text $section $key $value
+    }
+    [ordered]@{ id = $t.Gpo.Id.ToString(); section = $section; key = $key; changed = $w.Changed; before = $r.Before; after = $value }
+}
+
 # --- Other ops ------------------------------------------------------------------------------
 
 function Invoke-WhoAmI($a) {
@@ -831,6 +1059,9 @@ while ($null -ne ($line = $stdin.ReadLine())) {
             'gpo.set' { Invoke-GpoSet $a }
             'gpo.remove' { Invoke-GpoRemove $a }
             'gpo.backup' { Invoke-GpoBackup $a }
+            'gpo.grant' { Invoke-GpoRight $a $true }
+            'gpo.revoke' { Invoke-GpoRight $a $false }
+            'gpo.setSecurity' { Invoke-GpoSetSecurity $a }
             'policydefinitions' { Invoke-PolicyDefinitions $a }
             'search' { Invoke-Search $a }
             'add' { Invoke-Add $a }

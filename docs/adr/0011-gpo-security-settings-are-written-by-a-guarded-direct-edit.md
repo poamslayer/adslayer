@@ -11,7 +11,7 @@ adslayer writes the file itself, with these guardrails:
 3. It refuses to write to a GPO whose AD and SYSVOL computer versions already disagree, because that GPO is already out of step.
 4. It raises the computer half of the version by one, in AD's `versionNumber` and in `GPT.INI`, to the same value.
 5. It adds the security extension pair `[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]` to `gPCMachineExtensionNames` if it's missing, keeping the list sorted.
-6. It guards against a concurrent edit. It raises `versionNumber` with one LDAP modify that deletes the old value and adds the new one. If someone else changed the GPO in the meantime, the old value is gone, the modify fails, and adslayer writes back the file it replaced.
+6. It guards against a concurrent edit. It raises `versionNumber` with one LDAP modify that deletes the old value and adds the new one. If someone else changed the GPO in the meantime, the old value is gone, the modify fails, and adslayer writes back the file it replaced. It writes it back only if the file still holds what adslayer wrote, so that a file someone else wrote in the meantime stays. Issue #16 added this condition.
 7. It reads the file back and parses it to check the change.
 8. It answers with the value it replaced, so the yoloslayer skills can record the change and undo it. The server makes no backup (ADR-0004).
 9. It writes to SYSVOL on the PDC emulator, as every other call does (ADR-0006).
@@ -37,7 +37,11 @@ PASS A6 on a GPO that already has a GptTmpl.inf, Import-GPO copies the edit and 
 PASS B2 lab.delegated can write GptTmpl.inf, GPT.INI and versionNumber on Lab Baseline -- ds 47 sysvol 47
 ```
 
-The experiments tested guardrails 2, 4 and 5 (B1), and that a delegated editor has the rights (B2). Guardrails 1, 3, 6 and 7 are designs that this experiment did not test. The issue that builds the write calls has to test them on the lab, especially 6: that a modify deleting a `versionNumber` that is no longer there fails, and that the file is written back.
+The experiments tested guardrails 2, 4 and 5 (B1), and that a delegated editor has the rights (B2). Issue #16 tested the others on the lab when it built the write calls:
+
+- 1 and 7: `spike/e2e-mcp.mjs` checks that a change adds or replaces one line and leaves the rest.
+- 3: the same run checks that a GPO with mismatched versions is refused.
+- 6: `spike/gpo-security-guard.ps1` checks three cases. A write that loses the race removes the template it created. It writes back the old template. It keeps a template someone else wrote.
 
 ## Considered options
 
@@ -48,7 +52,7 @@ The experiments tested guardrails 2, 4 and 5 (B1), and that a delegated editor h
 
 ## Consequences
 
-- adslayer owns the version and extension bookkeeping that ADR-0007 wanted Microsoft's module to own. The guardrails above are that bookkeeping, and a lab run (`spike/run-gpo-security-write.ps1`) checks them.
+- adslayer owns the version and extension bookkeeping that ADR-0007 wanted Microsoft's module to own. The guardrails above are that bookkeeping, and lab runs check them: `spike/run-gpo-security-write.ps1`, `spike/run-gpo-security-guard.ps1` and `spike/run-e2e-on-lab.ps1`.
 - A user right set by a GPO stays set on a computer after the GPO stops setting it. This is called tattooing, and the lab showed it: the right stayed on `dc01` after the test GPOs were deleted. Undoing a change means setting the old value, not removing the new one.
 - A delegated editor who can edit a GPO in GPMC can write its security settings too (B2). The domain's own permissions still decide (ADR-0004).
 - The machine that runs adslayer needs SMB access to SYSVOL on the PDC emulator, which the GroupPolicy cmdlets need already.

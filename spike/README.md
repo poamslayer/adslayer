@@ -26,3 +26,11 @@ pwsh spike/run-e2e-on-lab.ps1
 ```sh
 pwsh spike/run-gpo-security-write.ps1
 ```
+
+## The concurrent-edit guard (#16)
+
+`run-gpo-security-guard.ps1` stages the helper on the DC and runs `gpo-security-guard.ps1` as `lab.da`. That script loads the helper's functions and calls `Write-GpoSecurity` with its `-BeforeVersionBump` hook. The hook stands for someone else saving the GPO in the middle of adslayer's write. The script checks that the write is refused and that the template is left as it should be (ADR-0011, guardrail 6).
+
+```sh
+pwsh spike/run-gpo-security-guard.ps1
+```

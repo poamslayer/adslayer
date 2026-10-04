@@ -28,7 +28,7 @@ return r.entries.map(e => e.attributes.sAMAccountName[0]);
 await gpo.set("Workstation Baseline", { key: "HKLM\\Software\\Policies\\Microsoft\\Windows\\Personalization", valueName: "NoLockScreen", type: "DWord", value: 1 });
 ```
 
-`gpo.get` also returns a GPO's security settings: password and lockout policy, user rights, Security Options, Restricted Groups and audit policy. These are read-only for now.
+`gpo.get` also returns a GPO's security settings: password and lockout policy, user rights, Security Options, Restricted Groups and audit policy. `gpo.grant` and `gpo.revoke` change who holds a user right, one account at a time, and `gpo.setSecurity` changes one password, lockout or Security Options value (ADR-0011). A GPO that defines a user right replaces the whole list on the computers it applies to, and a computer keeps a right after a GPO stops setting it.
 
 ## Installation
 

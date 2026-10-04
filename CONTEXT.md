@@ -60,6 +60,14 @@ _Avoid_: Assignment, scope
 One registry-based setting inside a GPO, i.e., what the Administrative Templates in the Group Policy editor show. These are the settings adslayer can change. ADR-0007.
 _Avoid_: Preference, rule
 
+**Security settings**:
+The settings in a GPO's security template, `GptTmpl.inf`: password and lockout policy, user rights, Security Options, Restricted Groups and audit policy. adslayer edits the file itself, under guardrails, because the GroupPolicy module can't. ADR-0011.
+_Avoid_: Security policy (too broad), security template (the file, not its settings)
+
+**Tattooing**:
+A computer keeping a setting after the GPO that set it stops setting it. User rights do this: removing a right from a GPO, or deleting the GPO, leaves the computers as they were until another GPO sets the right. Undoing a change means setting the old value, not removing the new one.
+_Avoid_: Sticky setting, residue
+
 ### The server
 
 **Connection**:

@@ -74,6 +74,9 @@ export const HOST_WORKER_SOURCE = [
   "    '  set: function (g, setting) { return __call(\"gpo.set\", [g, setting]); },',",
   "    '  remove: function (g, key, valueName) { return __call(\"gpo.remove\", [g, key, valueName]); },',",
   "    '  backup: function (g, path) { return __call(\"gpo.backup\", [g, path]); },',",
+  "    '  grant: function (g, right, principal) { return __call(\"gpo.grant\", [g, right, principal]); },',",
+  "    '  revoke: function (g, right, principal) { return __call(\"gpo.revoke\", [g, right, principal]); },',",
+  "    '  setSecurity: function (g, section, key, value) { return __call(\"gpo.setSecurity\", [g, section, key, value]); },',",
   "    '};',",
   "    preamble,",
   "    'export default class Run extends WorkerEntrypoint {',",
@@ -101,7 +104,7 @@ export const HOST_WORKER_SOURCE = [
  * A test in test/transport/stdio/miniflare-sandbox.test.ts pins this, so it fails if the
  * lines the module puts above the script ever change.
  */
-export const SANDBOX_SCRIPT_LINE_OFFSET = 49;
+export const SANDBOX_SCRIPT_LINE_OFFSET = 52;
 
 /**
  * Lines above the script for a sandbox built with this preamble. The breaks are counted rather
