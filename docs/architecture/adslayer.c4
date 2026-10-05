@@ -1,0 +1,306 @@
+// adslayer map: the map of record for this repo, at the C4 levels.
+// Colors follow color-key.md in the diagrams skill: fill = kind of thing, tag = status.
+// Check it with: npx -y likec4@1.59 validate docs/architecture
+// View it with:  npx -y likec4@1.59 start docs/architecture
+
+specification {
+  color key-amber #f9a825
+  color key-blue #1565c0
+  color key-teal #00897b
+  color key-green #2e7d32
+  color key-slate #546e7a
+
+  element person {
+    style {
+      shape person
+      color key-amber
+    }
+  }
+  element system {
+    style {
+      color key-blue
+    }
+  }
+  element container {
+    style {
+      color key-teal
+    }
+  }
+  element component {
+    style {
+      color key-green
+    }
+  }
+  element external {
+    style {
+      color key-slate
+    }
+  }
+
+  // Status marks
+  tag gap {
+    color #d32f2f
+  }
+  tag open {
+    color #ef6c00
+  }
+  tag idea {
+    color #9e9e9e
+  }
+
+  relationship inferred {
+    line dashed
+  }
+  relationship observed {
+    line dotted
+    color key-green
+  }
+}
+
+global {
+  styleGroup marks {
+    style element.tag = #idea {
+      border dashed
+      opacity 40%
+    }
+  }
+}
+
+model {
+  admin = person 'AD admin' {
+    description 'Signs in to Windows and asks an AI agent to read or change Active Directory. Adds connections with the CLI.'
+  }
+
+  agent = external 'AI agent (MCP client)' {
+    description 'Claude Code or another MCP client. Writes the short scripts that search and execute run.'
+  }
+  modelProvider = external 'Model provider' {
+    description 'Receives whatever directory data the tools return to the agent. ADR-0009.'
+  }
+  yoloslayer = external 'yoloslayer skills' {
+    description 'Change management: impact analysis, before state, preview, change record. A separate repo. ADR-0004.'
+  }
+  domain = external 'Active Directory domain' {
+    description 'Reached only through its PDC emulator, as the logged-on user over Kerberos. Holds objects, the schema, and GPOs (with their SYSVOL folders). ADR-0002, ADR-0006.'
+  }
+  learn = external 'Microsoft Learn MCP' {
+    description 'learn.microsoft.com/api/mcp. The docs tool forwards its searches here.'
+  }
+
+  adslayer = system 'adslayer' {
+    description 'An MCP server that lets an AI agent read and change on-premises Active Directory by writing scripts that run in a sandbox. Runs on Windows as the logged-on user.'
+
+    cli = container 'CLI' {
+      technology 'Node.js'
+      description 'The adslayer command: serve (the default), connect, disconnect, connections.'
+      metadata {
+        code 'src/cli/main.ts'
+      }
+    }
+
+    connectionsFile = container 'connections.json' {
+      technology 'JSON file in ADSLAYER_HOME (~/.adslayer)'
+      description 'Each connection: alias, domain and mode (read or write). No credentials. ADR-0005.'
+      metadata {
+        code 'src/core/config.ts'
+      }
+    }
+
+    server = container 'MCP server' {
+      technology 'Node.js, @modelcontextprotocol/sdk, stdio'
+      description 'Registers the tools and wires them to the sandboxes and the helper.'
+      metadata {
+        code 'src/core/server.ts'
+      }
+
+      stdio = component 'stdio transport' {
+        description 'Builds the dependencies and serves MCP over stdin and stdout. Shuts down workerd and the helper when the pipe closes.'
+        metadata {
+          code 'src/transport/stdio/main.ts'
+        }
+      }
+      searchTool = component 'search tool' {
+        description 'Runs a script over one domain\'s catalogue in the no-network sandbox.'
+        metadata {
+          code 'src/core/tools/search.ts'
+        }
+      }
+      executeTool = component 'execute tool' {
+        description 'Runs a script against one domain in the sandbox, with ad.* and gpo.* bound to the helper.'
+        metadata {
+          code 'src/core/tools/execute.ts'
+        }
+      }
+      docsTool = component 'docs tool' {
+        description 'Searches Microsoft Learn.'
+        metadata {
+          code 'src/core/tools/docs.ts'
+        }
+      }
+      connectionTools = component 'connection tools' {
+        description 'connections_list, connection_add, connection_remove.'
+        metadata {
+          code 'src/core/tools/connections.ts'
+        }
+      }
+      output = component 'output capping' {
+        description 'Caps and sheds tool output to fit the size limit.'
+        metadata {
+          code 'src/core/tools/output.ts'
+        }
+      }
+      store = component 'connection store' {
+        description 'Reads and writes connections.json. Resolves an alias or DNS name to a connection and its mode.'
+        metadata {
+          code 'src/core/connections/store.ts'
+        }
+      }
+      catalogue = component 'catalogue cache' {
+        description 'Reads a domain\'s schema, LDAP controls and extended rights live on first use, and keeps them for the session. ADR-0010.'
+        metadata {
+          code 'src/core/catalogue/catalogue.ts'
+        }
+      }
+      binding = component 'ad / gpo binding' {
+        description 'The ad.* and gpo.* calls a script can make. Refuses writes on a read connection before anything is sent. ADR-0004.'
+        metadata {
+          code 'src/core/sandbox/binding.ts'
+        }
+      }
+      acl = component 'ACL codec' {
+        description 'Decodes and encodes ACEs, naming GUIDs from the catalogue.'
+        metadata {
+          code 'src/core/sandbox/acl.ts'
+        }
+      }
+      gpttmpl = component 'GptTmpl.inf shaper' {
+        description 'Shapes GPO security settings for reading and writing. ADR-0011.'
+        metadata {
+          code 'src/core/sandbox/gpttmpl.ts'
+        }
+      }
+      ldapBackend = component 'LDAP backend port' {
+        description 'The interface core code uses to reach a domain. The PowerShell helper implements it.'
+        metadata {
+          code 'src/core/ldap/backend.ts'
+        }
+      }
+      miniflareDriver = component 'Miniflare sandbox driver' {
+        description 'Starts workerd on first use and forwards binding calls from the script to the host.'
+        metadata {
+          code 'src/transport/stdio/miniflare-sandbox.ts'
+        }
+      }
+      helperDriver = component 'PowerShell helper driver' {
+        description 'Spawns the helper on the first ad.* call and keeps it running. JSON lines over stdin and stdout.'
+        metadata {
+          code 'src/transport/stdio/powershell-helper.ts'
+        }
+      }
+    }
+
+    sandbox = container 'Execute sandbox' {
+      technology 'workerd via Miniflare'
+      description 'Runs the agent\'s execute script. Its only way out is the AD service binding.'
+      metadata {
+        code 'src/core/sandbox/sandbox-worker.ts'
+      }
+    }
+
+    catalogueSandbox = container 'Catalogue sandbox' {
+      technology 'workerd via Miniflare, no bindings'
+      description 'Runs search scripts over the catalogue. No network at all. Built on the first search. ADR-0010.'
+      metadata {
+        code 'src/core/sandbox/sandbox-worker.ts'
+      }
+    }
+
+    helper = container 'PowerShell helper' {
+      technology 'PowerShell 7 or 5.1, System.DirectoryServices.Protocols, GroupPolicy module'
+      description 'Does every LDAP call and GPO change as the logged-on user, against the PDC emulator. ADR-0003, ADR-0007.'
+      metadata {
+        code 'helper/adslayer-helper.ps1'
+      }
+    }
+  }
+
+  // Context
+  admin -> agent 'asks for AD work'
+  admin -> adslayer.cli 'adds and removes connections'
+  agent -> adslayer 'calls search, execute, docs and the connection tools' {
+    technology 'MCP over stdio'
+  }
+  agent -[inferred]-> modelProvider 'sends tool results'
+  agent -[inferred]-> yoloslayer 'follows for safe changes'
+  adslayer -> domain 'reads and writes, as the logged-on user'
+  adslayer -> learn 'searches docs'
+
+  // Containers
+  adslayer.cli -> adslayer.server 'starts with serve'
+  adslayer.cli -> adslayer.connectionsFile 'writes connections'
+  adslayer.server -> adslayer.connectionsFile 'reads and writes connections'
+  adslayer.server -> adslayer.sandbox 'runs execute scripts'
+  adslayer.server -> adslayer.catalogueSandbox 'runs search scripts'
+  adslayer.sandbox -> adslayer.server 'calls ad.* and gpo.*' {
+    technology 'service binding'
+  }
+  adslayer.server -> adslayer.helper 'sends LDAP and GPO requests' {
+    technology 'JSON lines over stdio'
+  }
+  adslayer.helper -> domain 'LDAP and GroupPolicy calls to the PDC emulator' {
+    technology 'Kerberos, signed and sealed'
+  }
+  adslayer.server -> learn 'forwards docs searches' {
+    technology 'MCP over HTTP'
+  }
+
+  // Components
+  agent -> adslayer.server.stdio 'MCP requests'
+  adslayer.server.stdio -> adslayer.server.searchTool 'routes'
+  adslayer.server.stdio -> adslayer.server.executeTool 'routes'
+  adslayer.server.stdio -> adslayer.server.docsTool 'routes'
+  adslayer.server.stdio -> adslayer.server.connectionTools 'routes'
+  adslayer.server.searchTool -> adslayer.server.store 'resolves the domain'
+  adslayer.server.searchTool -> adslayer.server.catalogue 'gets the catalogue'
+  adslayer.server.searchTool -> adslayer.catalogueSandbox 'runs the script'
+  adslayer.server.searchTool -> adslayer.server.output 'caps output'
+  adslayer.server.executeTool -> adslayer.server.store 'resolves the domain and mode'
+  adslayer.server.executeTool -> adslayer.server.binding 'makes the binding'
+  adslayer.server.executeTool -> adslayer.server.miniflareDriver 'runs the script'
+  adslayer.server.executeTool -> adslayer.server.output 'caps output'
+  adslayer.server.docsTool -> learn 'forwards the search'
+  adslayer.server.docsTool -> adslayer.server.output 'caps output'
+  adslayer.server.connectionTools -> adslayer.server.store 'lists, adds, removes'
+  adslayer.server.connectionTools -> adslayer.server.output 'caps output'
+  adslayer.server.store -> adslayer.connectionsFile 'reads and writes'
+  adslayer.server.miniflareDriver -> adslayer.sandbox 'starts and runs'
+  adslayer.server.miniflareDriver -> adslayer.catalogueSandbox 'starts and runs'
+  adslayer.sandbox -> adslayer.server.binding 'calls ad.* and gpo.*'
+  adslayer.server.binding -> adslayer.server.acl 'decodes and encodes ACEs'
+  adslayer.server.binding -> adslayer.server.gpttmpl 'shapes security settings'
+  adslayer.server.binding -> adslayer.server.catalogue 'names GUIDs in ACLs'
+  adslayer.server.binding -> adslayer.server.ldapBackend 'sends requests'
+  adslayer.server.catalogue -> adslayer.server.ldapBackend 'reads the schema'
+  adslayer.server.ldapBackend -> adslayer.server.helperDriver 'implemented by'
+  adslayer.server.helperDriver -> adslayer.helper 'spawns and talks to'
+}
+
+views {
+  global style marks
+
+  view index {
+    title 'System context'
+    description 'Click any box to zoom in. Colors: color-key.md in the diagrams skill.'
+    include *
+  }
+
+  view containers of adslayer {
+    title 'adslayer containers'
+    include *
+  }
+
+  view components of adslayer.server {
+    title 'MCP server components'
+    include *
+  }
+}
