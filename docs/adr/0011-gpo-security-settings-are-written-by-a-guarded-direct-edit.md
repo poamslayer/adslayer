@@ -13,7 +13,7 @@ adslayer writes the file itself, with these guardrails:
 5. It adds the security extension pair `[{827D319E-6EAC-11D2-A4EA-00C04F79F83A}{803E14A0-B4FB-11D0-A0D0-00A0C90F574B}]` to `gPCMachineExtensionNames` if it's missing, keeping the list sorted.
 6. It guards against a concurrent edit. It raises `versionNumber` with one LDAP modify that deletes the old value and adds the new one. If someone else changed the GPO in the meantime, the old value is gone, the modify fails, and adslayer writes back the file it replaced. It writes it back only if the file still holds what adslayer wrote, so that a file someone else wrote in the meantime stays. Issue #16 added this condition.
 7. It reads the file back and parses it to check the change.
-8. It answers with the value it replaced, so the yoloslayer skills can record the change and undo it. The server makes no backup (ADR-0004).
+8. It answers with the value it replaced, so the dont-nuke-prod skills can record the change and undo it. The server makes no backup (ADR-0004).
 9. It writes to SYSVOL on the PDC emulator, as every other call does (ADR-0006).
 10. A user right is changed one principal at a time, with grant and revoke. No call replaces a whole list. This was decided on 2026-10-02, when issue #3 was split.
 

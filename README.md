@@ -236,7 +236,7 @@ A read connection refuses every `add`, `modify`, `delete`, `move`, `addAce` and 
 
 To bring back a deleted object, a script finds it in the Recycle Bin with `ad.search` and the `showDeleted` control, then restores it with `ad.modify` and the same control. A read connection can find deleted objects but cannot restore them.
 
-adslayer does not back anything up, show a preview, or keep its own log. The yoloslayer skills hold those steps. Without them, an agent gets no backup and no preview. Active Directory's own security log, with Directory Service Changes auditing turned on, records each change.
+adslayer does not back anything up, show a preview, or keep its own log. The dont-nuke-prod skills hold those steps. Without them, an agent gets no backup and no preview. Active Directory's own security log, with Directory Service Changes auditing turned on, records each change.
 
 ## Where results go
 
