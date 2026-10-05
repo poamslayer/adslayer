@@ -1,5 +1,6 @@
 // Serves the LikeC4 map as a static site on Workers. No Worker code, only assets.
-// The deploy-map workflow builds dist/ with `likec4 build` and runs `wrangler deploy` here.
+// Cloudflare Workers Builds (Git integration on the adslayer-map Worker) builds dist/ with
+// `likec4 build` and runs `wrangler deploy` here when main changes.
 {
   "$schema": "https://unpkg.com/wrangler@4.147.0/config-schema.json",
   "name": "adslayer-map",
