@@ -1,0 +1,12 @@
+// Serves the LikeC4 map as a static site on Workers. No Worker code, only assets.
+// The deploy-map workflow builds dist/ with `likec4 build` and runs `wrangler deploy` here.
+{
+  "$schema": "https://unpkg.com/wrangler@4.147.0/config-schema.json",
+  "name": "adslayer-map",
+  "compatibility_date": "2026-10-04",
+  "assets": {
+    "directory": "./dist",
+    // The viewer routes in the browser, so every path that is not a file gets index.html.
+    "not_found_handling": "single-page-application"
+  }
+}

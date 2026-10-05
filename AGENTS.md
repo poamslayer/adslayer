@@ -10,4 +10,4 @@ Single-context layout: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/ag
 
 ### Architecture map
 
-`docs/architecture/adslayer.c4` is the LikeC4 map of record, following the `diagrams` skill. Update it in the same change when you add, remove, rename or rewire anything under `src/` or `helper/`, add an MCP tool, or add an outside system the server talks to. `test/architecture-map.test.ts` fails when a module has no element. Check it with `npx -y likec4@1.59 validate docs/architecture`.
+`docs/architecture/adslayer.c4` is the LikeC4 map of record, following the `diagrams` skill. Update it in the same change when you add, remove, rename or rewire anything under `src/` or `helper/`, add an MCP tool, or add an outside system the server talks to. `test/architecture-map.test.ts` fails when a module has no element. Check it with `npx -y likec4@1.59 validate docs/architecture`. The `Deploy map` workflow publishes it to https://adslayer-map.arnolddlv-1e4.workers.dev whenever it changes on `main`.
