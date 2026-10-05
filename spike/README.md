@@ -34,3 +34,18 @@ pwsh spike/run-gpo-security-write.ps1
 ```sh
 pwsh spike/run-gpo-security-guard.ps1
 ```
+
+## What the existing calls can already do (#24 to #27)
+
+`lab-checks.mjs` checks four changes that have no call of their own. It does each change through the real server, then looks at the result with Windows' own tools. The four changes are:
+
+- a password reset with `ad.modify` on `unicodePwd`
+- a WMI filter made with `ad.add` and set with `ad.modify` on `gPCWQLFilter`
+- a GPO rename with `ad.modify` on `displayName`, compared with `Rename-GPO`
+- Windows Firewall profile settings and a rule written with `gpo.set`, compared with what `New-NetFirewallRule` writes
+
+It runs through the e2e runner. run-command returns only the last 4 KB of output, so the script prints short results and writes the full notes to a file in the user's temp folder on the DC.
+
+```sh
+pwsh spike/run-e2e-on-lab.ps1 -Script lab-checks.mjs
+```

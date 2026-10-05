@@ -3,7 +3,8 @@
 # body (protected parameters ride on a command line, which Windows caps at 32 KB); each user then
 # runs through azure-ad-lab's guest/run-as.ps1. Needs az signed in, the DC running, and the lab
 # passwords in the macOS Keychain (azure-ad-lab's setup.sh).
-param([string[]]$Roles = @('da', 'delegated'))
+# -Script picks another driver from spike/, e.g. lab-checks.mjs (issues #24 to #27).
+param([string[]]$Roles = @('da', 'delegated'), [string]$Script = 'e2e-mcp.mjs')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $lab = if ($env:AZURE_AD_LAB) { $env:AZURE_AD_LAB } else { Join-Path (Split-Path -Parent $repo) 'azure-ad-lab' }
@@ -27,7 +28,7 @@ try {
     $tgzB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $repo $tgz)))
     Remove-Item (Join-Path $repo $tgz)
 } finally { Pop-Location }
-$e2eB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'e2e-mcp.mjs')))
+$e2eB64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $Script)))
 
 $stage = @"
 `$ErrorActionPreference = 'Stop'
@@ -35,7 +36,7 @@ $stage = @"
 if (Test-Path `$dir) { Remove-Item `$dir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path `$dir | Out-Null
 [IO.File]::WriteAllBytes("`$dir\$tgz", [Convert]::FromBase64String('$tgzB64'))
-[IO.File]::WriteAllBytes("`$dir\e2e-mcp.mjs", [Convert]::FromBase64String('$e2eB64'))
+[IO.File]::WriteAllBytes("`$dir\$Script", [Convert]::FromBase64String('$e2eB64'))
 `$env:Path = "`$env:ProgramFiles\nodejs;`$env:Path"
 Set-Location `$dir
 '{"name":"adslayer-e2e","private":true,"type":"module"}' | Set-Content package.json -Encoding Ascii
@@ -51,7 +52,7 @@ if ($iv.output -notmatch 'STAGED' -or $iv.output -match 'NOT_STAGED') { throw "s
 foreach ($role in $Roles) {
     $inner = @"
 `$env:Path = "`$env:ProgramFiles\nodejs;`$env:Path"
-& "`$env:ProgramFiles\nodejs\node.exe" C:\adslayer-e2e\e2e-mcp.mjs C:\adslayer-e2e\node_modules\adslayer\dist\cli\main.js '$role' 2>&1 | ForEach-Object { "`$_" }
+& "`$env:ProgramFiles\nodejs\node.exe" C:\adslayer-e2e\$Script C:\adslayer-e2e\node_modules\adslayer\dist\cli\main.js '$role' 2>&1 | ForEach-Object { "`$_" }
 "@
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($inner))
     $iv = Invoke-Rc (Get-Content -Raw "$lab/guest/run-as.ps1") @("User=LAB\lab.$role", "Password=$pw", "ScriptB64=$b64", 'ArgsB64=e30=')

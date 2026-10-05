@@ -29,10 +29,31 @@ return g?.attributes.member?.length ?? 0;
 return await ad.modify("CN=Jane Doe,OU=Sales,DC=contoso,DC=local", [{ op: "replace", attribute: "userAccountControl", values: "514" }]);
 
 // Reset a password. unicodePwd takes the password in double quotes as UTF-16LE bytes. Add pwdLastSet "0" to force a change at next sign-in.
+// A password the domain's policy rejects fails with UnwillingToPerform and 0000052D in the message.
 const pw = '"' + newPassword + '"';
 let b = "";
 for (let i = 0; i < pw.length; i++) { const c = pw.charCodeAt(i); b += String.fromCharCode(c & 255, c >> 8); }
 return await ad.modify("CN=Jane Doe,OU=Sales,DC=contoso,DC=local", [{ op: "replace", attribute: "unicodePwd", values: { base64: btoa(b) } }, { op: "replace", attribute: "pwdLastSet", values: "0" }]);
+
+// Rename a GPO. Rename-GPO changes only displayName, so this is the same. Unlike Rename-GPO it allows a name another GPO has, so check first.
+if ((await gpo.list()).some(g => g.name === "Web Servers 2026")) throw new Error("name taken");
+const id = (await gpo.get("Web Servers")).id;
+return await ad.modify("CN={" + id + "},CN=Policies,CN=System,DC=contoso,DC=local", [{ op: "replace", attribute: "displayName", values: "Web Servers 2026" }]);
+
+// Make a WMI filter as GPMC does, and set it on a GPO. msWMI-Parm2 is: query count; then for each query the lengths of "WQL",
+// the namespace and the query; then the three. To take the filter off, delete gPCWQLFilter.
+const q = "SELECT * FROM Win32_OperatingSystem WHERE ProductType = 1";
+const fid = "{" + crypto.randomUUID().toUpperCase() + "}", now = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14) + ".000000-000";
+const gpoId = (await gpo.get("Web Servers")).id;
+await ad.add("CN=" + fid + ",CN=SOM,CN=WMIPolicy,CN=System,DC=contoso,DC=local", { objectClass: "msWMI-Som", "msWMI-ID": fid, "msWMI-Name": "Workstations only", "msWMI-Parm1": "", "msWMI-Parm2": "1;3;10;" + q.length + ";WQL;root\\\\CIMv2;" + q + ";", "msWMI-Author": "jane@contoso.local", "msWMI-CreationDate": now, "msWMI-ChangeDate": now, showInAdvancedViewOnly: "TRUE" });
+return await ad.modify("CN={" + gpoId + "},CN=Policies,CN=System,DC=contoso,DC=local", [{ op: "replace", attribute: "gPCWQLFilter", values: "[contoso.local;" + fid + ";0]" }]);
+
+// Windows Firewall policy is registry policy under HKLM\\Software\\Policies\\Microsoft\\WindowsFirewall. Profiles: DomainProfile,
+// PrivateProfile, PublicProfile (EnableFirewall, DefaultInboundAction 1 = block). A rule is a String value in FirewallRules, named by a new GUID.
+// adslayer does not check the rule text. Its format is in Microsoft's MS-GPFAS spec.
+const fw = "HKLM\\\\Software\\\\Policies\\\\Microsoft\\\\WindowsFirewall";
+await gpo.set("Web Servers", { key: fw + "\\\\DomainProfile", valueName: "DefaultInboundAction", type: "DWord", value: 1 });
+return await gpo.set("Web Servers", { key: fw + "\\\\FirewallRules", valueName: "{" + crypto.randomUUID() + "}", type: "String", value: "v2.10|Action=Allow|Active=TRUE|Dir=In|Protocol=6|Profile=Domain|LPort=443|Name=HTTPS in|" });
 
 // Restore a deleted user from the Recycle Bin to where it was. Delete isDeleted first, then set the new DN.
 const controls = { showDeleted: true };
