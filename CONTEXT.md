@@ -1,6 +1,6 @@
 # adslayer
 
-An MCP server that lets an AI agent read from and write to on-premises Active Directory. It has the same three tools as graphslayer. `docs` searches Microsoft Learn, `search` runs a script over the catalogue, and `execute` runs a script against a domain. The server is the hands. Judgment about when and how to change a domain lives in the yoloslayer skills.
+An MCP server that lets an AI agent read from and write to on-premises Active Directory. It has the same three tools as graphslayer. `docs` searches Microsoft Learn, `search` runs a script over the catalogue, and `execute` runs a script against a domain. The server is the hands. Judgment about when and how to change a domain lives in the dont-nuke-prod skills.
 
 ## Language
 
@@ -96,6 +96,6 @@ _Avoid_: Sync, update
 
 ### Around the server
 
-**yoloslayer**:
+**dont-nuke-prod**:
 The skill stack that tells an agent how to make a change safely in Microsoft 365 and Active Directory. Its steps include impact analysis, a saved before state, a preview, and a record of the change. It is a separate repo. ADR-0004.
-_Avoid_: slaystack-m365 (its old name), guardrails, policy
+_Avoid_: yoloslayer and slaystack-m365 (its old names), guardrails, policy

@@ -2,7 +2,7 @@
 
 The only limit the server puts on a write is the connection's mode. A read connection refuses every add, modify, delete, move and GPO change inside the binding, before anything is sent. A write connection sends whatever the script asks for, and Active Directory permissions decide the rest. The server has no dry run, no confirmation step, no backup step and no local audit log. Arnold decided this on 2026-10-01: "MCP is simply the hands."
 
-The steps that make a change safe live in the yoloslayer skills, which are a separate repo. They include these:
+The steps that make a change safe live in the dont-nuke-prod skills, which are a separate repo. They include these:
 
 - checking that the Recycle Bin is on before a delete
 - running `Backup-GPO` before a GPO change
@@ -19,5 +19,5 @@ The record of what changed is Active Directory's own security log, i.e., the Dir
 
 ## Consequences
 
-- An agent that runs without the yoloslayer skills gets no backup, no preview and no check on the Recycle Bin.
-- If Directory Service Changes auditing is off in a domain, Active Directory keeps no record of attribute changes. The yoloslayer change record is then the only record.
+- An agent that runs without the dont-nuke-prod skills gets no backup, no preview and no check on the Recycle Bin.
+- If Directory Service Changes auditing is off in a domain, Active Directory keeps no record of attribute changes. The dont-nuke-prod change record is then the only record.

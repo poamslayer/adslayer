@@ -77,7 +77,7 @@ model {
   modelProvider = external 'Model provider' {
     description 'Receives whatever directory data the tools return to the agent. ADR-0009.'
   }
-  yoloslayer = external 'yoloslayer skills' {
+  dontNukeProd = external 'dont-nuke-prod skills' {
     description 'Change management: impact analysis, before state, preview, change record. A separate repo. ADR-0004.'
   }
   domain = external 'Active Directory domain' {
@@ -231,7 +231,7 @@ model {
     technology 'MCP over stdio'
   }
   agent -[inferred]-> modelProvider 'sends tool results'
-  agent -[inferred]-> yoloslayer 'follows for safe changes'
+  agent -[inferred]-> dontNukeProd 'follows for safe changes'
   adslayer -> domain 'reads and writes, as the logged-on user'
   adslayer -> learn 'searches docs'
 
