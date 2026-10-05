@@ -236,6 +236,13 @@ A read connection refuses every `add`, `modify`, `delete`, `move`, `addAce` and 
 
 To bring back a deleted object, a script finds it in the Recycle Bin with `ad.search` and the `showDeleted` control, then restores it with `ad.modify` and the same control. A read connection can find deleted objects but cannot restore them.
 
+Some changes have no call of their own, because the calls adslayer has can already make them. Each of these was tested on the lab domain controller with `spike/lab-checks.mjs`. The execute tool description has an example script for each one.
+
+- **Reset a password.** Use `ad.modify` to replace `unicodePwd` with the new password in double quotes, encoded as UTF-16LE and passed as `{ base64 }`. Add a replace of `pwdLastSet` with `"0"` to make the user change it at the next sign-in. A password that breaks the domain's password policy fails with `UnwillingToPerform` and `0000052D` in the message, and the old password keeps working.
+- **Rename a GPO.** Use `ad.modify` to replace `displayName` on the GPO's object under `CN=Policies,CN=System`. `Rename-GPO` changes only that attribute, so the result is the same. `Rename-GPO` refuses a name another GPO already has, and `ad.modify` does not, so check the name first. Two GPOs with the same name cannot be found by name.
+- **Make a WMI filter and set it on a GPO.** Use `ad.add` to make an `msWMI-Som` object under `CN=SOM,CN=WMIPolicy,CN=System`, then use `ad.modify` to set the GPO's `gPCWQLFilter` to `[domain;{filter id};0]`. GPMC, `gpo.get` and `gpresult` all show the filter, and computers apply it. To take it off, delete `gPCWQLFilter`. By default only Domain Admins and Group Policy Creator Owners can make a WMI filter.
+- **Set Windows Firewall policy.** Use `gpo.set` on keys under `HKLM\Software\Policies\Microsoft\WindowsFirewall`. The profile settings, e.g. `DomainProfile\EnableFirewall`, are DWord values. A rule is a String value under `FirewallRules`, named by a new GUID, e.g. `v2.10|Action=Allow|Active=TRUE|Dir=In|Protocol=6|Profile=Domain|LPort=443|Name=HTTPS in|`. GPMC and the firewall cmdlets read these settings, and computers apply them. adslayer does not check the rule text.
+
 adslayer does not back anything up, show a preview, or keep its own log. The dont-nuke-prod skills hold those steps. Without them, an agent gets no backup and no preview. Active Directory's own security log, with Directory Service Changes auditing turned on, records each change.
 
 ## Where results go

@@ -26,6 +26,20 @@ describe("MiniflareSandbox.run", () => {
     expect(seen).toEqual([["get", "CN=a,DC=x", ["name"], undefined]]);
   });
 
+  it("has crypto.randomUUID and btoa, which the execute examples use for WMI filters, firewall rules and passwords", async () => {
+    const r = await sandbox.run(
+      `const pw = '"' + "Pa55-wörd!" + '"';
+      let b = "";
+      for (let i = 0; i < pw.length; i++) { const c = pw.charCodeAt(i); b += String.fromCharCode(c & 255, c >> 8); }
+      return { id: crypto.randomUUID(), pwd: btoa(b) };`,
+      noBinding,
+    );
+    expect(r.ok).toBe(true);
+    const data = r.data as { id: string; pwd: string };
+    expect(data.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(data.pwd).toBe(Buffer.from('"Pa55-wörd!"', "utf16le").toString("base64"));
+  });
+
   it("passes undefined for a missing optional argument", async () => {
     const seen: unknown[][] = [];
     const handler = async (_op: string, args: unknown[]) => {
