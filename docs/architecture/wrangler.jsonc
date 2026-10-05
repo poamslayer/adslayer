@@ -1,0 +1,15 @@
+// Serves the LikeC4 map as a static site on Workers. No Worker code, only assets.
+// Cloudflare Workers Builds (Git integration on the adslayer-map Worker) runs `sh build.sh` and
+// then `wrangler deploy` here when main changes.
+{
+  "$schema": "https://unpkg.com/wrangler@4.147.0/config-schema.json",
+  "name": "adslayer-map",
+  "compatibility_date": "2026-10-04",
+  "assets": {
+    "directory": "./dist"
+  },
+  // The whole host for now. When the docs site arrives it takes the host, and this Worker moves to
+  // a route on adslayer.poamslayer.com/architecture*. The zone's redirect rule to
+  // arnolddelavega.com excludes this host; keep it excluded.
+  "routes": [{ "pattern": "adslayer.poamslayer.com", "custom_domain": true }]
+}
