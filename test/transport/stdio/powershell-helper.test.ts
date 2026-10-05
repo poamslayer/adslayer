@@ -56,9 +56,10 @@ describe("PowerShellHelper", () => {
   });
 
   it("gives up on a call that never answers, and starts a fresh helper after", async () => {
-    const h = helper(300);
+    // Long enough for the fake helper to start on a slow Windows runner, where 0.3 seconds was not.
+    const h = helper(2000);
     const first = ((await h.call("d.test", "echo", {})) as { pid: number }).pid;
-    await expect(h.call("d.test", "hang", {})).rejects.toThrow(/did not answer hang within 0.3 seconds/);
+    await expect(h.call("d.test", "hang", {})).rejects.toThrow(/did not answer hang within 2 seconds/);
     const second = ((await h.call("d.test", "echo", {})) as { pid: number }).pid;
     expect(second).not.toBe(first);
   });
